@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Decision Debt Architecture</title>
+<style>
+:root{--bg:#f6f7f9;--panel:#ffffff;--ink:#0f172a;--ink2:#475569;--line:#cbd5e1;
+--g1:#eef2ff;--g2:#fff7ed;--g3:#ecfeff;--g4:#f0fdf4;--g5:#f5f3ff;--g6:#fef2f2;--g7:#f8fafc;
+--c-ingest:#c2410c;--c-ext:#64748b;--c-main:#334155;--c-truth:#0e7490;--c-agent:#6d28d9;--c-know:#15803d;--c-mon:#b91c1c}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#0b1020;--panel:#111827;--ink:#e5e7eb;--ink2:#9ca3af;--line:#334155;
+--g1:#151a33;--g2:#24170c;--g3:#0c1f24;--g4:#0e1f15;--g5:#1b1530;--g6:#261313;--g7:#151b26;
+--c-ingest:#fb923c;--c-ext:#94a3b8;--c-main:#cbd5e1;--c-truth:#22d3ee;--c-agent:#a78bfa;--c-know:#4ade80;--c-mon:#f87171}}
+:root[data-theme="dark"]{--bg:#0b1020;--panel:#111827;--ink:#e5e7eb;--ink2:#9ca3af;--line:#334155;
+--g1:#151a33;--g2:#24170c;--g3:#0c1f24;--g4:#0e1f15;--g5:#1b1530;--g6:#261313;--g7:#151b26;
+--c-ingest:#fb923c;--c-ext:#94a3b8;--c-main:#cbd5e1;--c-truth:#22d3ee;--c-agent:#a78bfa;--c-know:#4ade80;--c-mon:#f87171}
+html,body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,"Apple SD Gothic Neo","Noto Sans KR","Segoe UI",sans-serif}
+.wrap{padding:16px;overflow-x:auto}
+svg{display:block;width:100%;min-width:1100px;height:auto}
+.canvas{fill:var(--bg)}
+.group{stroke:var(--line);stroke-width:1}
+.group.g1{fill:var(--g1)}.group.g2{fill:var(--g2)}.group.g3{fill:var(--g3)}.group.g4{fill:var(--g4)}
+.group.g5{fill:var(--g5)}.group.g6{fill:var(--g6)}.group.g7{fill:var(--g7)}
+.g-title{font-size:13px;font-weight:700;letter-spacing:.02em;fill:var(--ink2);text-transform:uppercase}
+.node{fill:var(--panel);stroke:var(--line);stroke-width:1.2}
+.node.agent,.node.mcp{stroke:var(--c-agent)}.node.ext{stroke-dasharray:5 4}.node.memo{stroke:var(--c-truth);stroke-width:1.6}
+.note{fill:var(--panel);stroke:var(--line);stroke-dasharray:4 4;opacity:.92}
+.n-title{font-size:14px;font-weight:700;fill:var(--ink)}.n-title.big{font-size:22px}
+.n-sub{font-size:11.5px;fill:var(--ink2)}
+.truth-tag{font-size:12px;font-weight:700;fill:var(--c-truth)}
+.db{fill:var(--panel);stroke:var(--c-truth);stroke-width:2.4}.db-top{fill:var(--panel);stroke:var(--c-truth);stroke-width:2.4}
+.db-row{fill:var(--g3);stroke:var(--line)}.db-row-t{font-size:12.5px;fill:var(--ink)}
+.lane{stroke-width:1}.lane.facts{fill:var(--g3);stroke:var(--c-truth)}.lane.ai{fill:var(--g5);stroke:var(--c-agent);stroke-dasharray:4 3}
+.lane-t{font-size:12px;font-weight:700;fill:var(--ink)}.lane-s{font-size:11px;fill:var(--ink2)}
+.edge{fill:none;stroke-width:1.8}.edge.dashed{stroke-dasharray:6 5}
+.edge.c-ingest{stroke:var(--c-ingest)}.mk.c-ingest{fill:var(--c-ingest)}.edge.c-ext{stroke:var(--c-ext)}.mk.c-ext{fill:var(--c-ext)}.edge.c-main{stroke:var(--c-main)}.mk.c-main{fill:var(--c-main)}.edge.c-truth{stroke:var(--c-truth)}.mk.c-truth{fill:var(--c-truth)}.edge.c-agent{stroke:var(--c-agent)}.mk.c-agent{fill:var(--c-agent)}.edge.c-know{stroke:var(--c-know)}.mk.c-know{fill:var(--c-know)}.edge.c-mon{stroke:var(--c-mon)}.mk.c-mon{fill:var(--c-mon)}
+path.edge{fill:none!important}.mk{stroke:none}
+.edge-label{font-size:11px;font-weight:600;fill:var(--ink2);paint-order:stroke;stroke:var(--bg);stroke-width:4px;stroke-linejoin:round}
+.legend{font-size:11.5px;fill:var(--ink2)}
+.h1{font-size:22px;font-weight:800;fill:var(--ink)}.h2{font-size:12.5px;fill:var(--ink2)}.h3{font-size:11.5px;fill:var(--ink2)}
+.logo path{stroke:none}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .logo[data-dark] path{fill:#fff}}
+:root[data-theme="dark"] .logo[data-dark] path{fill:#fff}
+</style></head>
+<body><div class="wrap"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1800 1150" role="img" aria-labelledby="dd-title">
+<title id="dd-title">Decision Debt architecture</title>
+<defs><marker id="a-c-agent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="mk c-agent"/></marker><marker id="s-c-agent" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M10,0 L0,5 L10,10 z" class="mk c-agent"/></marker><marker id="a-c-ext" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="mk c-ext"/></marker><marker id="s-c-ext" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M10,0 L0,5 L10,10 z" class="mk c-ext"/></marker><marker id="a-c-ingest" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="mk c-ingest"/></marker><marker id="s-c-ingest" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M10,0 L0,5 L10,10 z" class="mk c-ingest"/></marker><marker id="a-c-know" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="mk c-know"/></marker><marker id="s-c-know" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M10,0 L0,5 L10,10 z" class="mk c-know"/></marker><marker id="a-c-main" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="mk c-main"/></marker><marker id="s-c-main" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M10,0 L0,5 L10,10 z" class="mk c-main"/></marker><marker id="a-c-mon" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="mk c-mon"/></marker><marker id="s-c-mon" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M10,0 L0,5 L10,10 z" class="mk c-mon"/></marker><marker id="a-c-truth" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="mk c-truth"/></marker><marker id="s-c-truth" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M10,0 L0,5 L10,10 z" class="mk c-truth"/></marker></defs>
+<rect class="canvas" x="0" y="0" width="1800" height="1150"/>
+<g><rect class="group g1" x="24" y="20" width="1752" height="132" rx="14"/><text class="g-title g1" x="42" y="42">1. User &amp; Interfaces</text></g>
+<g><rect class="group g2" x="24" y="176" width="446" height="720" rx="14"/><text class="g-title g2" x="42" y="198">2. Decision Ingestion</text></g>
+<g><rect class="group g3" x="500" y="176" width="450" height="720" rx="14"/><text class="g-title g3" x="518" y="198">3. Source of Truth</text></g>
+<g><rect class="group g5" x="980" y="176" width="796" height="390" rx="14"/><text class="g-title g5" x="998" y="198">5. Agent Layer</text></g>
+<g><rect class="group g4" x="980" y="590" width="796" height="306" rx="14"/><text class="g-title g4" x="998" y="612">4. Knowledge / RAG</text></g>
+<g><rect class="group g7" x="24" y="920" width="446" height="210" rx="14"/><text class="g-title g7" x="76" y="942">7. External Model Fallback</text></g>
+<g><rect class="group g6" x="500" y="920" width="1276" height="210" rx="14"/><text class="g-title g6" x="518" y="942">6. Monitoring &amp; Automation</text></g>
+<text class="h1" x="44" y="76">Decision Debt — Architecture</text>
+<text class="h2" x="44" y="100">verified technical decisions, review triggers and AI-assisted review</text>
+<text class="h3" x="44" y="122">snapshot 2026-11-11 · local-first</text>
+<path class="edge c-ingest" d="M1420,46 L1454,46" marker-end="url(#a-c-ingest)"/>
+<text class="legend" x="1464" y="50">ingestion</text>
+<path class="edge c-truth" d="M1600,46 L1634,46" marker-end="url(#a-c-truth)"/>
+<text class="legend" x="1644" y="50">authoritative data</text>
+<path class="edge c-agent" d="M1420,74 L1454,74" marker-end="url(#a-c-agent)"/>
+<text class="legend" x="1464" y="78">agent · read-only</text>
+<path class="edge c-know" d="M1600,74 L1634,74" marker-end="url(#a-c-know)"/>
+<text class="legend" x="1644" y="78">knowledge copy</text>
+<path class="edge c-mon" d="M1420,102 L1454,102" marker-end="url(#a-c-mon)"/>
+<text class="legend" x="1464" y="106">monitoring / alert</text>
+<path class="edge c-ext dashed" d="M1600,102 L1634,102" marker-end="url(#a-c-ext)"/>
+<text class="legend" x="1644" y="106">conditional fallback</text>
+<rect class="note" x="1430" y="212" width="326" height="296" rx="10"/>
+<g transform="translate(1444,226) scale(0.9166666666666666)" fill="none" stroke="var(--c-agent)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></g>
+<text class="n-title" x="1476" y="243">Agent guardrails</text>
+<text class="n-sub" x="1446" y="274">Hermes toolsets: decision-debt + gbrain only</text>
+<text class="n-sub" x="1446" y="292">(no terminal · file · browser · memory)</text>
+<text class="n-sub" x="1446" y="310"></text>
+<text class="n-sub" x="1446" y="328">Both MCP servers are read-only</text>
+<text class="n-sub" x="1446" y="346"></text>
+<text class="n-sub" x="1446" y="364">Hermes cannot approve, edit or create</text>
+<text class="n-sub" x="1446" y="382">Decisions</text>
+<text class="n-sub" x="1446" y="400"></text>
+<text class="n-sub" x="1446" y="418">Review Memo facts are rendered by</text>
+<text class="n-sub" x="1446" y="436">the backend from SQLite, never by the model</text>
+<text class="n-sub" x="1446" y="454"></text>
+<text class="n-sub" x="1446" y="472">Tool calls audited per session</text>
+<rect class="note" x="64" y="730" width="380" height="140" rx="10"/>
+<text class="n-sub" x="80" y="756">Extraction is local-first and runs in FastAPI.</text>
+<text class="n-sub" x="80" y="773"></text>
+<text class="n-sub" x="80" y="790">OpenRouter GLM-5.3 is called only when the</text>
+<text class="n-sub" x="80" y="807">local model fails to structure a candidate.</text>
+<text class="n-sub" x="80" y="824"></text>
+<text class="n-sub" x="80" y="841">Hermes is not part of extraction.</text>
+<text class="n-sub" x="80" y="858">Nothing becomes a Decision without approval.</text>
+<rect class="note" x="1462" y="770" width="294" height="96" rx="10"/>
+<text class="n-sub" x="1478" y="796">SQLite stays the source of truth.</text>
+<text class="n-sub" x="1478" y="816">gbrain and Dify hold searchable</text>
+<text class="n-sub" x="1478" y="836">copies of verified Decisions only.</text>
+<text class="n-sub" x="520" y="1104">Alert only when a new ACTIVE → REVIEW_DUE event is created · no repeats while a Decision stays REVIEW_DUE</text>
+<text class="n-sub" x="520" y="1121">no alert for decisions already due at first check (baseline) or for recovery REVIEW_DUE → ACTIVE</text>
+<text class="edge-label" x="60" y="912" text-anchor="start">selective fallback ↓ · structured result ↑</text>
+<text class="edge-label" x="1000" y="760" text-anchor="start">Dify Knowledge sync (copy of verified Decisions)</text>
+<text class="edge-label" x="940" y="250" text-anchor="middle">Review Memo</text>
+<text class="edge-label" x="940" y="265" text-anchor="middle">hermes -z</text>
+<text class="edge-label" x="940" y="302" text-anchor="middle">AI analysis</text>
+<path class="edge c-ingest" d="M560,100 L400,100 L400,258 L304,258" marker-end="url(#a-c-ingest)"/>
+<text class="edge-label" x="480.0" y="93" text-anchor="middle">upload meeting audio</text>
+<path class="edge c-ingest" d="M184,288 L184,308" marker-end="url(#a-c-ingest)"/>
+<path class="edge c-ingest" d="M184,368 L184,388" marker-end="url(#a-c-ingest)"/>
+<path class="edge c-ingest" d="M184,448 L184,468" marker-end="url(#a-c-ingest)"/>
+<path class="edge c-ingest" d="M184,540 L184,562" marker-end="url(#a-c-ingest)"/>
+<path class="edge c-ingest" d="M184,622 L184,642" marker-end="url(#a-c-ingest)"/>
+<path class="edge c-ext dashed" d="M64,504 L36,504 L36,1032 L64,1032" marker-end="url(#a-c-ext)"/>
+<path class="edge c-ext dashed" d="M64,992 L52,992 L52,592 L64,592" marker-end="url(#a-c-ext)"/>
+<path class="edge c-ingest" d="M304,672 L560,672" marker-end="url(#a-c-ingest)"/>
+<text class="edge-label" x="432.0" y="665" text-anchor="middle">approve → verified Decision</text>
+<path class="edge c-main" d="M720,134 L720,212" marker-end="url(#a-c-main)"/>
+<text class="edge-label" x="727" y="177.0" text-anchor="start">REST /api</text>
+<path class="edge c-main" d="M720,316 L720,356" marker-end="url(#a-c-main)" marker-start="url(#s-c-main)"/>
+<path class="edge c-truth" d="M720,706 L720,736" marker-end="url(#a-c-truth)"/>
+<path class="edge c-agent" d="M880,282 L1000,282" marker-end="url(#a-c-agent)" marker-start="url(#s-c-agent)"/>
+<path class="edge c-agent" d="M1230,134 L1230,212" marker-end="url(#a-c-agent)" marker-start="url(#s-c-agent)"/>
+<text class="edge-label" x="1237" y="177.0" text-anchor="start">chat</text>
+<path class="edge c-agent" d="M1095,320 L1095,392" marker-end="url(#a-c-agent)"/>
+<path class="edge c-agent" d="M1305,320 L1305,392" marker-end="url(#a-c-agent)"/>
+<path class="edge c-agent" d="M1000,450 L880,450" marker-end="url(#a-c-agent)"/>
+<text class="edge-label" x="940.0" y="443" text-anchor="middle">read verified state</text>
+<path class="edge c-know" d="M880,656 L1000,656" marker-end="url(#a-c-know)"/>
+<text class="edge-label" x="940.0" y="649" text-anchor="middle">Markdown export</text>
+<path class="edge c-know" d="M1170,656 L1220,656" marker-end="url(#a-c-know)"/>
+<text class="edge-label" x="1195.0" y="649" text-anchor="middle">sync</text>
+<path class="edge c-know" d="M1390,656 L1450,656" marker-end="url(#a-c-know)" marker-start="url(#s-c-know)"/>
+<text class="edge-label" x="1420.0" y="649" text-anchor="middle">embed</text>
+<path class="edge c-agent" d="M1305,508 L1305,616" marker-end="url(#a-c-agent)"/>
+<text class="edge-label" x="1312" y="566.0" text-anchor="start">semantic search</text>
+<path class="edge c-know" d="M880,690 L950,690 L950,818 L1000,818" marker-end="url(#a-c-know)"/>
+<path class="edge c-know" d="M1190,818 L1240,818" marker-end="url(#a-c-know)"/>
+<path class="edge c-mon" d="M756,1028 L796,1028" marker-end="url(#a-c-mon)"/>
+<path class="edge c-mon" d="M1032,1028 L1072,1028" marker-end="url(#a-c-mon)"/>
+<path class="edge c-mon" d="M1308,1028 L1348,1028" marker-end="url(#a-c-mon)"/>
+<path class="edge c-mon" d="M1544,1028 L1584,1028" marker-end="url(#a-c-mon)"/>
+<g id="n-sqlite"><path class="db" d="M560,374 a160.0,18 0 0,0 320,0 v314 a160.0,18 0 0,1 -320,0 z"/><ellipse class="db-top" cx="720.0" cy="374" rx="160.0" ry="18"/><g transform="translate(582,402) scale(1.25)" class="logo"><title>SQLite</title><path d="M21.678.521c-1.032-.92-2.28-.55-3.513.544a8.71 8.71 0 0 0-.547.535c-2.109 2.237-4.066 6.38-4.674 9.544.237.48.422 1.093.544 1.561a13.044 13.044 0 0 1 .164.703s-.019-.071-.096-.296l-.05-.146a1.689 1.689 0 0 0-.033-.08c-.138-.32-.518-.995-.686-1.289-.143.423-.27.818-.376 1.176.484.884.778 2.4.778 2.4s-.025-.099-.147-.442c-.107-.303-.644-1.244-.772-1.464-.217.804-.304 1.346-.226 1.478.152.256.296.698.422 1.186.286 1.1.485 2.44.485 2.44l.017.224a22.41 22.41 0 0 0 .056 2.748c.095 1.146.273 2.13.5 2.657l.155-.084c-.334-1.038-.47-2.399-.41-3.967.09-2.398.642-5.29 1.661-8.304 1.723-4.55 4.113-8.201 6.3-9.945-1.993 1.8-4.692 7.63-5.5 9.788-.904 2.416-1.545 4.684-1.931 6.857.666-2.037 2.821-2.912 2.821-2.912s1.057-1.304 2.292-3.166c-.74.169-1.955.458-2.362.629-.6.251-.762.337-.762.337s1.945-1.184 3.613-1.72C21.695 7.9 24.195 2.767 21.678.521m-18.573.543A1.842 1.842 0 0 0 1.27 2.9v16.608a1.84 1.84 0 0 0 1.835 1.834h9.418a22.953 22.953 0 0 1-.052-2.707c-.006-.062-.011-.141-.016-.2a27.01 27.01 0 0 0-.473-2.378c-.121-.47-.275-.898-.369-1.057-.116-.197-.098-.31-.097-.432 0-.12.015-.245.037-.386a9.98 9.98 0 0 1 .234-1.045l.217-.028c-.017-.035-.014-.065-.031-.097l-.041-.381a32.8 32.8 0 0 1 .382-1.194l.2-.019c-.008-.016-.01-.038-.018-.053l-.043-.316c.63-3.28 2.587-7.443 4.8-9.791.066-.069.133-.128.198-.194Z" fill="#003B57"/></g><text class="n-title big" x="622" y="418">SQLite</text><text class="truth-tag" x="622" y="436">authoritative source of truth</text><g><rect class="db-row" x="584" y="452" width="272" height="28" rx="6"/><text class="db-row-t" x="598" y="471">Verified Decisions</text></g><g><rect class="db-row" x="584" y="488" width="272" height="28" rx="6"/><text class="db-row-t" x="598" y="507">Decision Candidates</text></g><g><rect class="db-row" x="584" y="524" width="272" height="28" rx="6"/><text class="db-row-t" x="598" y="543">Sources (text · audio transcripts)</text></g><g><rect class="db-row" x="584" y="560" width="272" height="28" rx="6"/><text class="db-row-t" x="598" y="579">Review State</text></g><g><rect class="db-row" x="584" y="596" width="272" height="28" rx="6"/><text class="db-row-t" x="598" y="615">Review Events</text></g><g><rect class="db-row" x="584" y="632" width="272" height="28" rx="6"/><text class="db-row-t" x="598" y="651">Review Memos</text></g></g>
+<g id="n-webui"><rect class="node" x="560" y="50" width="320" height="84" rx="10"/>
+<g transform="translate(572,62) scale(0.9166666666666666)" class="logo" data-dark=""><title>Next.js</title><path d="M18.665 21.978C16.758 23.255 14.465 24 12 24 5.377 24 0 18.623 0 12S5.377 0 12 0s12 5.377 12 12c0 3.583-1.574 6.801-4.067 9.001L9.219 7.2H7.2v9.596h1.615V9.251l9.85 12.727Zm-3.332-8.533 1.6 2.061V7.2h-1.6v6.245Z" fill="#000000"/></g>
+<text class="n-title" x="602" y="78">Next.js 16 Web UI</text>
+<text class="n-sub" x="574" y="100">:3000 · Review Queue · Decisions</text>
+<text class="n-sub" x="574" y="116">Review Memo · Ask Agent</text>
+</g>
+<g id="n-tg"><rect class="node" x="1080" y="50" width="300" height="84" rx="10"/>
+<g transform="translate(1092,62) scale(0.9166666666666666)" class="logo"><title>Telegram</title><path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z" fill="#26A5E4"/></g>
+<text class="n-title" x="1122" y="78">Telegram Bot</text>
+<text class="n-sub" x="1094" y="100">questions to Hermes</text>
+<text class="n-sub" x="1094" y="116">Review Due alerts</text>
+</g>
+<g id="n-audio"><rect class="node" x="64" y="228" width="240" height="60" rx="10"/>
+<g transform="translate(76,240) scale(0.9166666666666666)" fill="none" stroke="var(--ink2)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v1a7 7 0 0 0 14 0v-1M12 18v4M8 22h8"/></g>
+<text class="n-title" x="106" y="256">Audio Upload</text>
+<text class="n-sub" x="78" y="278">wav · mp3 · m4a</text>
+</g>
+<g id="n-stt"><rect class="node" x="64" y="308" width="240" height="60" rx="10"/>
+<g transform="translate(76,320) scale(0.9166666666666666)" fill="none" stroke="var(--ink2)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/></g>
+<text class="n-title" x="106" y="336">whisper.cpp</text>
+<text class="n-sub" x="78" y="358">local STT · large-v3-turbo</text>
+</g>
+<g id="n-tx"><rect class="node" x="64" y="388" width="240" height="60" rx="10"/>
+<g transform="translate(76,400) scale(0.9166666666666666)" fill="none" stroke="var(--ink2)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h6"/></g>
+<text class="n-title" x="106" y="416">Korean transcript</text>
+<text class="n-sub" x="78" y="438">timestamped Source text</text>
+</g>
+<g id="n-qwen"><rect class="node" x="64" y="468" width="240" height="72" rx="10"/>
+<g transform="translate(76,480) scale(0.9166666666666666)" fill="none" stroke="var(--ink2)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/></g>
+<text class="n-title" x="106" y="496">Qwen2.5-7B-Instruct</text>
+<text class="n-sub" x="78" y="518">local · llama-swap / llama.cpp</text>
+<text class="n-sub" x="78" y="534">:8080</text>
+</g>
+<g id="n-cand"><rect class="node" x="64" y="562" width="240" height="60" rx="10"/>
+<g transform="translate(76,574) scale(0.9166666666666666)" fill="none" stroke="var(--ink2)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.5 5h13L22 12v6a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-6z"/></g>
+<text class="n-title" x="106" y="590">Decision Candidate</text>
+<text class="n-sub" x="78" y="612">pending · awaiting review</text>
+</g>
+<g id="n-review"><rect class="node" x="64" y="642" width="240" height="60" rx="10"/>
+<g transform="translate(76,654) scale(0.9166666666666666)" fill="none" stroke="var(--ink2)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="7" r="4"/><path d="M2 21v-1a6 6 0 0 1 6-6h2a6 6 0 0 1 6 6v1M16 11l2 2 4-4"/></g>
+<text class="n-title" x="106" y="670">Human Review / Approval</text>
+<text class="n-sub" x="78" y="692">Review Queue (human-in-the-loop)</text>
+</g>
+<g id="n-api"><rect class="node" x="560" y="212" width="320" height="104" rx="10"/>
+<g transform="translate(572,224) scale(0.9166666666666666)" class="logo"><title>FastAPI</title><path d="M12 .0387C5.3729.0384.0003 5.3931 0 11.9988c-.001 6.6066 5.372 11.9628 12 11.9625 6.628.0003 12.001-5.3559 12-11.9625-.0003-6.6057-5.3729-11.9604-12-11.96m-.829 5.4153h7.55l-7.5805 5.3284h5.1828L5.279 18.5436q2.9466-6.5444 5.892-13.0896" fill="#009688"/></g>
+<g transform="translate(600,224) scale(0.9166666666666666)" class="logo"><title>Python</title><path d="M11.858 0c-.978.005-1.913.088-2.736.234C6.7.662 6.26 1.558 6.26 3.21v2.182h5.725v.727H4.111c-1.664 0-3.121 1-3.577 2.903-.526 2.181-.549 3.542 0 5.82.407 1.694 1.379 2.902 3.043 2.902h1.969v-2.616c0-1.89 1.635-3.557 3.576-3.557h5.72c1.591 0 2.862-1.31 2.862-2.91v-5.45c0-1.553-1.309-2.718-2.863-2.977A18 18 0 0 0 11.858 0M8.762 1.755c.591 0 1.074.491 1.074 1.095 0 .601-.483 1.087-1.074 1.087A1.08 1.08 0 0 1 7.688 2.85c0-.604.48-1.095 1.074-1.095m9.656 4.364v2.543c0 1.971-1.671 3.63-3.577 3.63H9.122c-1.566 0-2.862 1.34-2.862 2.91v5.452c0 1.551 1.349 2.464 2.862 2.91 1.813.532 3.55.628 5.72 0 1.44-.418 2.862-1.258 2.862-2.91V18.47h-5.719v-.727h8.582c1.664 0 2.284-1.16 2.862-2.903.598-1.793.573-3.518 0-5.819-.41-1.656-1.196-2.903-2.862-2.903zm-3.216 13.807a1.08 1.08 0 0 1 1.074 1.088c0 .604-.48 1.094-1.074 1.094-.592 0-1.075-.49-1.075-1.094 0-.601.483-1.088 1.075-1.088" fill="#3776AB"/></g>
+<text class="n-title" x="630" y="240">FastAPI backend</text>
+<text class="n-sub" x="574" y="262">:8001 · Python</text>
+<text class="n-sub" x="574" y="278">Review Queue · Extraction · Memo assembly</text>
+<text class="n-sub" x="574" y="294">Review Monitor · Ask Agent proxy</text>
+</g>
+<g id="n-hermes"><rect class="node agent" x="1000" y="212" width="390" height="108" rx="10"/>
+<g transform="translate(1012,224) scale(0.9166666666666666)" fill="none" stroke="var(--ink2)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="7" width="16" height="12" rx="3"/><path d="M12 3v4M9 12h.01M15 12h.01M9 16h6"/></g>
+<text class="n-title" x="1042" y="240">Hermes Gateway</text>
+<text class="n-sub" x="1014" y="262">agent LLM: OpenRouter GLM-5.3 (reasoning low)</text>
+<text class="n-sub" x="1014" y="278">answers Telegram questions · finds related</text>
+<text class="n-sub" x="1014" y="294">past Decisions · AI analysis for Review Memo</text>
+</g>
+<g id="n-ddmcp"><rect class="node mcp" x="1000" y="392" width="190" height="116" rx="10"/>
+<g transform="translate(1012,404) scale(0.9166666666666666)" fill="none" stroke="var(--ink2)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M7 6.5h.01M7 17.5h.01"/></g>
+<text class="n-title" x="1042" y="420">Decision Debt MCP</text>
+<text class="n-sub" x="1014" y="442">read-only (SQLite mode=ro)</text>
+<text class="n-sub" x="1014" y="458">list_review_due</text>
+<text class="n-sub" x="1014" y="474">get_decision_detail</text>
+</g>
+<g id="n-gbmcp"><rect class="node mcp" x="1210" y="392" width="190" height="116" rx="10"/>
+<g transform="translate(1222,404) scale(0.9166666666666666)" fill="none" stroke="var(--ink2)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M7 6.5h.01M7 17.5h.01"/></g>
+<text class="n-title" x="1252" y="420">gbrain MCP</text>
+<text class="n-sub" x="1224" y="442">read-only</text>
+<text class="n-sub" x="1224" y="458">(serve --access read-only)</text>
+<text class="n-sub" x="1224" y="474">semantic search · get_page</text>
+</g>
+<g id="n-md"><rect class="node" x="1000" y="616" width="170" height="80" rx="10"/>
+<g transform="translate(1012,628) scale(0.9166666666666666)" fill="none" stroke="var(--ink2)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h6"/></g>
+<text class="n-title" x="1042" y="644">Markdown export</text>
+<text class="n-sub" x="1014" y="666">~/decision-debt-brain/</text>
+<text class="n-sub" x="1014" y="682">decisions/</text>
+</g>
+<g id="n-gbrain"><rect class="node" x="1220" y="616" width="170" height="80" rx="10"/>
+<g transform="translate(1232,628) scale(0.9166666666666666)" fill="none" stroke="var(--ink2)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3a3 3 0 0 0-3 3 3 3 0 0 0-2 5 3 3 0 0 0 2 5 3 3 0 0 0 3 3h0a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2z"/><path d="M15 3a3 3 0 0 1 3 3 3 3 0 0 1 2 5 3 3 0 0 1-2 5 3 3 0 0 1-3 3h0a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/></g>
+<text class="n-title" x="1262" y="644">gbrain</text>
+<text class="n-sub" x="1234" y="666">source: decision-debt</text>
+<text class="n-sub" x="1234" y="682">searchable copy</text>
+</g>
+<g id="n-emb"><rect class="node" x="1450" y="616" width="306" height="80" rx="10"/>
+<g transform="translate(1462,628) scale(0.9166666666666666)" fill="none" stroke="var(--ink2)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/></g>
+<text class="n-title" x="1492" y="644">qwen3-embedding-0.6b</text>
+<text class="n-sub" x="1464" y="666">local · llama-swap / llama.cpp</text>
+<text class="n-sub" x="1464" y="682">1024-dim embeddings</text>
+</g>
+<g id="n-difykb"><rect class="node" x="1000" y="770" width="190" height="96" rx="10"/>
+<g transform="translate(1012,782) scale(0.9166666666666666)" class="logo"><title>Dify</title><path d="m22.417 9.334-1.333 4.333-1.334-4.333h-1.583L20.1 14.94c.2.583-.14 1.06-.756 1.06h-.678v1.334h.996c.869 0 1.65-.55 1.945-1.367L24 9.334ZM2.833 6.667H0v8.666h2.833c3.5 0 4.5-2 4.5-4.333s-1-4.334-4.5-4.334zM2.866 14H1.6V8h1.266c2.013 0 2.867.988 2.867 3s-.854 3-2.867 3m11-5.267v.6h-1.532v1.334h1.533V14h-2.534V9.334H8v1.334h1.867V14h-2.2v1.334h10V14h-2.332v-3.333h2.333V9.334h-2.333V8h2.333V6.667h-1.733a2.07 2.07 0 0 0-2.067 2.067Zm-3.266-.2c.681 0 .933-.417.933-.933 0-.515-.252-.933-.933-.933-.68 0-.934.418-.934.933s.253.934.934.934" fill="#0033FF"/></g>
+<g transform="translate(1160,838) scale(0.75)" class="logo"><title>Docker</title><path d="M13.983 11.078h2.119a.186.186 0 00.186-.185V9.006a.186.186 0 00-.186-.186h-2.119a.185.185 0 00-.185.185v1.888c0 .102.083.185.185.185m-2.954-5.43h2.118a.186.186 0 00.186-.186V3.574a.186.186 0 00-.186-.185h-2.118a.185.185 0 00-.185.185v1.888c0 .102.082.185.185.185m0 2.716h2.118a.187.187 0 00.186-.186V6.29a.186.186 0 00-.186-.185h-2.118a.185.185 0 00-.185.185v1.887c0 .102.082.185.185.186m-2.93 0h2.12a.186.186 0 00.184-.186V6.29a.185.185 0 00-.185-.185H8.1a.185.185 0 00-.185.185v1.887c0 .102.083.185.185.186m-2.964 0h2.119a.186.186 0 00.185-.186V6.29a.185.185 0 00-.185-.185H5.136a.186.186 0 00-.186.185v1.887c0 .102.084.185.186.186m5.893 2.715h2.118a.186.186 0 00.186-.185V9.006a.186.186 0 00-.186-.186h-2.118a.185.185 0 00-.185.185v1.888c0 .102.082.185.185.185m-2.93 0h2.12a.185.185 0 00.184-.185V9.006a.185.185 0 00-.184-.186h-2.12a.185.185 0 00-.184.185v1.888c0 .102.083.185.185.185m-2.964 0h2.119a.185.185 0 00.185-.185V9.006a.185.185 0 00-.184-.186h-2.12a.186.186 0 00-.186.186v1.887c0 .102.084.185.186.185m-2.92 0h2.12a.185.185 0 00.184-.185V9.006a.185.185 0 00-.184-.186h-2.12a.185.185 0 00-.184.185v1.888c0 .102.082.185.185.185M23.763 9.89c-.065-.051-.672-.51-1.954-.51-.338.001-.676.03-1.01.087-.248-1.7-1.653-2.53-1.716-2.566l-.344-.199-.226.327c-.284.438-.49.922-.612 1.43-.23.97-.09 1.882.403 2.661-.595.332-1.55.413-1.744.42H.751a.751.751 0 00-.75.748 11.376 11.376 0 00.692 4.062c.545 1.428 1.355 2.48 2.41 3.124 1.18.723 3.1 1.137 5.275 1.137.983.003 1.963-.086 2.93-.266a12.248 12.248 0 003.823-1.389c.98-.567 1.86-1.288 2.61-2.136 1.252-1.418 1.998-2.997 2.553-4.4h.221c1.372 0 2.215-.549 2.68-1.009.309-.293.55-.65.707-1.046l.098-.288Z" fill="#2496ED"/></g>
+<text class="n-title" x="1042" y="798">Dify Knowledge Base</text>
+<text class="n-sub" x="1014" y="820">synced copy of verified</text>
+<text class="n-sub" x="1014" y="836">Decisions (not source of truth)</text>
+</g>
+<g id="n-difyagent"><rect class="node" x="1240" y="770" width="190" height="96" rx="10"/>
+<g transform="translate(1252,782) scale(0.9166666666666666)" class="logo"><title>Dify</title><path d="m22.417 9.334-1.333 4.333-1.334-4.333h-1.583L20.1 14.94c.2.583-.14 1.06-.756 1.06h-.678v1.334h.996c.869 0 1.65-.55 1.945-1.367L24 9.334ZM2.833 6.667H0v8.666h2.833c3.5 0 4.5-2 4.5-4.333s-1-4.334-4.5-4.334zM2.866 14H1.6V8h1.266c2.013 0 2.867.988 2.867 3s-.854 3-2.867 3m11-5.267v.6h-1.532v1.334h1.533V14h-2.534V9.334H8v1.334h1.867V14h-2.2v1.334h10V14h-2.332v-3.333h2.333V9.334h-2.333V8h2.333V6.667h-1.733a2.07 2.07 0 0 0-2.067 2.067Zm-3.266-.2c.681 0 .933-.417.933-.933 0-.515-.252-.933-.933-.933-.68 0-.934.418-.934.933s.253.934.934.934" fill="#0033FF"/></g>
+<text class="n-title" x="1282" y="798">Dify Ask Agent</text>
+<text class="n-sub" x="1254" y="820">RAG chat</text>
+<text class="n-sub" x="1254" y="836">via FastAPI Ask Agent proxy</text>
+</g>
+<g id="n-or"><rect class="node ext" x="64" y="972" width="300" height="80" rx="10"/>
+<g transform="translate(76,984) scale(0.9166666666666666)" class="logo"><title>OpenRouter</title><path d="M16.778 1.844v1.919q-.569-.026-1.138-.032-.708-.008-1.415.037c-1.93.126-4.023.728-6.149 2.237-2.911 2.066-2.731 1.95-4.14 2.75-.396.223-1.342.574-2.185.798-.841.225-1.753.333-1.751.333v4.229s.768.108 1.61.333c.842.224 1.789.575 2.185.799 1.41.798 1.228.683 4.14 2.75 2.126 1.509 4.22 2.11 6.148 2.236.88.058 1.716.041 2.555.005v1.918l7.222-4.168-7.222-4.17v2.176c-.86.038-1.611.065-2.278.021-1.364-.09-2.417-.357-3.979-1.465-2.244-1.593-2.866-2.027-3.68-2.508.889-.518 1.449-.906 3.822-2.59 1.56-1.109 2.614-1.377 3.978-1.466.667-.044 1.418-.017 2.278.02v2.176L24 6.014Z" fill="#94A3B8"/></g>
+<text class="n-title" x="106" y="1000">OpenRouter · GLM-5.3</text>
+<text class="n-sub" x="78" y="1022">external · extraction fallback only</text>
+<text class="n-sub" x="78" y="1038">when local structuring fails</text>
+</g>
+<g id="n-resolver"><rect class="node" x="520" y="980" width="236" height="96" rx="10"/>
+<g transform="translate(532,992) scale(0.9166666666666666)" fill="none" stroke="var(--ink2)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 14l4-4"/><path d="M3.3 19a10 10 0 1 1 17.4 0z"/></g>
+<text class="n-title" x="562" y="1008">State Resolver</text>
+<text class="n-sub" x="534" y="1030">:8000 · check_metric</text>
+<text class="n-sub" x="534" y="1046">user_count · search_api_p95_ms</text>
+<text class="n-sub" x="534" y="1062">server_count</text>
+</g>
+<g id="n-monitor"><rect class="node" x="796" y="980" width="236" height="96" rx="10"/>
+<g transform="translate(808,992) scale(0.9166666666666666)" fill="none" stroke="var(--ink2)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></g>
+<text class="n-title" x="838" y="1008">Review Monitor</text>
+<text class="n-sub" x="810" y="1030">inside FastAPI · every 30s</text>
+<text class="n-sub" x="810" y="1046">trigger evaluation</text>
+<text class="n-sub" x="810" y="1062">ACTIVE → REVIEW_DUE</text>
+</g>
+<g id="n-event"><rect class="node" x="1072" y="980" width="236" height="96" rx="10"/>
+<g transform="translate(1084,992) scale(0.9166666666666666)" fill="none" stroke="var(--ink2)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.9 1.9 0 0 0 3.4 0"/></g>
+<text class="n-title" x="1114" y="1008">Review Event</text>
+<text class="n-sub" x="1086" y="1030">new REVIEW_DUE transition</text>
+<text class="n-sub" x="1086" y="1046">stored in SQLite</text>
+</g>
+<g id="n-send"><rect class="node" x="1348" y="980" width="196" height="96" rx="10"/>
+<g transform="translate(1360,992) scale(0.9166666666666666)" fill="none" stroke="var(--ink2)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4z"/></g>
+<text class="n-title" x="1390" y="1008">hermes send</text>
+<text class="n-sub" x="1362" y="1030">--to telegram</text>
+<text class="n-sub" x="1362" y="1046">once per new event</text>
+</g>
+<g id="n-alert"><rect class="node" x="1584" y="980" width="172" height="96" rx="10"/>
+<g transform="translate(1596,992) scale(0.9166666666666666)" class="logo"><title>Telegram</title><path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z" fill="#26A5E4"/></g>
+<text class="n-title" x="1626" y="1008">Telegram alert</text>
+<text class="n-sub" x="1598" y="1030">same Telegram bot</text>
+<text class="n-sub" x="1598" y="1046">phone notification</text>
+</g>
+<rect class="node memo" x="540" y="736" width="380" height="144" rx="10"/><g transform="translate(552,748) scale(0.9166666666666666)" fill="none" stroke="var(--ink2)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h6"/></g>
+<g id="n-memo-inner">
+<text class="n-title" x="582" y="762">Review Memo</text><text class="n-sub" x="690" y="762">stored in SQLite</text>
+<rect class="lane facts" x="552" y="774" width="356" height="46" rx="6"/>
+<text class="lane-t" x="562" y="792">Authoritative facts — backend, deterministic</text>
+<text class="lane-s" x="562" y="810">Decision · Rationale · Assumptions · Trigger · Observed State · Evidence</text>
+<rect class="lane ai" x="552" y="826" width="356" height="46" rx="6"/>
+<text class="lane-t" x="562" y="844">AI analysis — Hermes (cannot rewrite facts)</text>
+<text class="lane-s" x="562" y="862">related past Decisions · changes · missing info · human checks</text>
+</g>
+</svg></div>
+<!-- Logos: Simple Icons 16.37.0 (CC0 icon data; brand marks belong to their owners). Generic icons for project components. -->
+</body></html>

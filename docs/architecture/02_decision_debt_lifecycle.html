@@ -1,0 +1,325 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Decision Debt Lifecycle</title><style>
+:root{--bg:#f6f7f9;--stage:#ffffff;--ink:#0f172a;--ink2:#475569;--line:#dbe1e8;
+--f-backend:#ffffff;--f-local:#fefce8;--f-ext:#f8fafc;--f-human:#fdf2f8;--f-data:#ecfeff;--f-agent:#f5f3ff;--f-notify:#f0f9ff;
+--s-backend:#334155;--s-local:#a16207;--s-ext:#64748b;--s-human:#db2777;--s-data:#0e7490;--s-agent:#6d28d9;--s-notify:#0284c7;
+--c-flow:#334155;--c-ext:#64748b;--c-human:#db2777;--c-copy:#15803d;--c-data:#0e7490;--c-event:#b91c1c;--c-notify:#0284c7;--c-agent:#6d28d9}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#0b1020;--stage:#111827;--ink:#e5e7eb;--ink2:#9ca3af;--line:#334155;
+--f-backend:#0f172a;--f-local:#1c1a10;--f-ext:#151b26;--f-human:#2a1020;--f-data:#0c1f24;--f-agent:#1b1530;--f-notify:#0c1a2a;
+--s-backend:#cbd5e1;--s-local:#facc15;--s-ext:#94a3b8;--s-human:#f472b6;--s-data:#22d3ee;--s-agent:#a78bfa;--s-notify:#38bdf8;
+--c-flow:#cbd5e1;--c-ext:#94a3b8;--c-human:#f472b6;--c-copy:#4ade80;--c-data:#22d3ee;--c-event:#f87171;--c-notify:#38bdf8;--c-agent:#a78bfa}:root:not([data-theme="light"]) .logo[data-dark] path{fill:#fff}}
+:root[data-theme="dark"]{--bg:#0b1020;--stage:#111827;--ink:#e5e7eb;--ink2:#9ca3af;--line:#334155;
+--f-backend:#0f172a;--f-local:#1c1a10;--f-ext:#151b26;--f-human:#2a1020;--f-data:#0c1f24;--f-agent:#1b1530;--f-notify:#0c1a2a;
+--s-backend:#cbd5e1;--s-local:#facc15;--s-ext:#94a3b8;--s-human:#f472b6;--s-data:#22d3ee;--s-agent:#a78bfa;--s-notify:#38bdf8;
+--c-flow:#cbd5e1;--c-ext:#94a3b8;--c-human:#f472b6;--c-copy:#4ade80;--c-data:#22d3ee;--c-event:#f87171;--c-notify:#38bdf8;--c-agent:#a78bfa}:root[data-theme="dark"] .logo[data-dark] path{fill:#fff}
+html,body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,"Apple SD Gothic Neo","Noto Sans KR","Segoe UI",sans-serif}
+.wrap{padding:16px;overflow-x:auto} svg{display:block;width:100%;min-width:1200px;height:auto}
+.canvas{fill:var(--bg)} .stage{fill:var(--stage);stroke:var(--line)}
+.pill{fill:var(--bg);stroke:var(--line)} .s-num{font-size:13px;font-weight:800;fill:var(--ink)}
+.s-title{font-size:13px;font-weight:700;fill:var(--ink2);letter-spacing:.02em;text-transform:uppercase}
+.node{stroke-width:1.5}
+.node.backend{fill:var(--f-backend);stroke:var(--s-backend)}.node.localai{fill:var(--f-local);stroke:var(--s-local)}
+.node.external{fill:var(--f-ext);stroke:var(--s-ext);stroke-dasharray:5 4}.node.human{fill:var(--f-human);stroke:var(--s-human);stroke-width:2.4}
+.node.data{fill:var(--f-data);stroke:var(--s-data)}.node.agent{fill:var(--f-agent);stroke:var(--s-agent)}.node.notify{fill:var(--f-notify);stroke:var(--s-notify)}
+.note{fill:var(--stage);stroke:var(--line);stroke-dasharray:4 4}.note.human{fill:var(--f-human);stroke:var(--s-human)}
+.note.warn{fill:var(--f-ext);stroke:var(--s-ext)}.note.copy{fill:var(--stage);stroke:var(--c-copy)}.note.notify{fill:var(--f-notify);stroke:var(--s-notify)}
+.note-t{font-size:12.5px;font-weight:700;fill:var(--ink)}
+.statebox{fill:var(--bg);stroke:var(--line)}
+.state{stroke-width:2}.state.active{fill:var(--f-data);stroke:var(--s-data)}.state.due{fill:#fee2e2;stroke:var(--c-event)}
+.state-t{font-size:13.5px;font-weight:800;fill:#0f172a}
+.n-title{font-size:14px;font-weight:700;fill:var(--ink)} .n-sub{font-size:11.5px;fill:var(--ink2)}
+.lane.facts{fill:var(--stage);stroke:var(--s-data);stroke-width:1.4}.lane.ai{fill:var(--f-agent);stroke:var(--s-agent);stroke-dasharray:4 3}
+.lane-t{font-size:12px;font-weight:700;fill:var(--ink)}.lane-s{font-size:11.5px;fill:var(--ink2)}
+path.edge{fill:none!important;stroke-width:1.8}.edge.thick{stroke-width:3}.edge.dashed{stroke-dasharray:6 5}.mk{stroke:none}
+.edge.c-flow{stroke:var(--c-flow)}.mk.c-flow{fill:var(--c-flow)}.edge.c-ext{stroke:var(--c-ext)}.mk.c-ext{fill:var(--c-ext)}.edge.c-human{stroke:var(--c-human)}.mk.c-human{fill:var(--c-human)}.edge.c-copy{stroke:var(--c-copy)}.mk.c-copy{fill:var(--c-copy)}.edge.c-data{stroke:var(--c-data)}.mk.c-data{fill:var(--c-data)}.edge.c-event{stroke:var(--c-event)}.mk.c-event{fill:var(--c-event)}.edge.c-notify{stroke:var(--c-notify)}.mk.c-notify{fill:var(--c-notify)}.edge.c-agent{stroke:var(--c-agent)}.mk.c-agent{fill:var(--c-agent)}
+.edge-label{font-size:11.5px;font-weight:600;fill:var(--ink2);paint-order:stroke;stroke:var(--stage);stroke-width:4px;stroke-linejoin:round}
+.legend{font-size:11.5px;fill:var(--ink2)} .h1{font-size:24px;font-weight:800;fill:var(--ink)} .h3{font-size:12px;fill:var(--ink2)}
+.logo path{stroke:none}
+</style></head>
+<body><div class="wrap"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2000 1275" role="img" aria-labelledby="t">
+<title id="t">Decision Debt Agent — Decision Lifecycle</title>
+<defs><marker id="a-c-agent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="mk c-agent"/></marker><marker id="s-c-agent" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M10,0 L0,5 L10,10 z" class="mk c-agent"/></marker><marker id="a-c-copy" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="mk c-copy"/></marker><marker id="s-c-copy" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M10,0 L0,5 L10,10 z" class="mk c-copy"/></marker><marker id="a-c-data" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="mk c-data"/></marker><marker id="s-c-data" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M10,0 L0,5 L10,10 z" class="mk c-data"/></marker><marker id="a-c-event" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="mk c-event"/></marker><marker id="s-c-event" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M10,0 L0,5 L10,10 z" class="mk c-event"/></marker><marker id="a-c-ext" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="mk c-ext"/></marker><marker id="s-c-ext" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M10,0 L0,5 L10,10 z" class="mk c-ext"/></marker><marker id="a-c-flow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="mk c-flow"/></marker><marker id="s-c-flow" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M10,0 L0,5 L10,10 z" class="mk c-flow"/></marker><marker id="a-c-human" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="mk c-human"/></marker><marker id="s-c-human" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M10,0 L0,5 L10,10 z" class="mk c-human"/></marker><marker id="a-c-notify" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="mk c-notify"/></marker><marker id="s-c-notify" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M10,0 L0,5 L10,10 z" class="mk c-notify"/></marker></defs>
+<rect class="canvas" width="2000" height="1275"/>
+<g><rect class="stage" x="24" y="100" width="286" height="540" rx="14"/><rect class="pill" x="36" y="110" width="67" height="24" rx="12"/><text class="s-num" x="49" y="127">1</text><text class="s-title" x="64" y="127">Input</text></g>
+<g><rect class="stage" x="330" y="100" width="440" height="540" rx="14"/><rect class="pill" x="342" y="110" width="182" height="24" rx="12"/><text class="s-num" x="355" y="127">2</text><text class="s-title" x="370" y="127">Decision Extraction</text></g>
+<g><rect class="stage" x="790" y="100" width="240" height="540" rx="14"/><rect class="pill" x="802" y="110" width="124" height="24" rx="12"/><text class="s-num" x="815" y="127">3</text><text class="s-title" x="830" y="127">Human Review</text></g>
+<g><rect class="stage" x="1050" y="100" width="290" height="540" rx="14"/><rect class="pill" x="1062" y="110" width="149" height="24" rx="12"/><text class="s-num" x="1075" y="127">4</text><text class="s-title" x="1090" y="127">Source of Truth</text></g>
+<g><rect class="stage" x="1360" y="100" width="616" height="540" rx="14"/><rect class="pill" x="1372" y="110" width="280" height="24" rx="12"/><text class="s-num" x="1385" y="127">5</text><text class="s-title" x="1400" y="127">Knowledge Sync · derived copies</text></g>
+<g><rect class="stage" x="24" y="680" width="526" height="575" rx="14"/><rect class="pill" x="36" y="690" width="198" height="24" rx="12"/><text class="s-num" x="49" y="707">6</text><text class="s-title" x="64" y="707">Continuous Monitoring</text></g>
+<g><rect class="stage" x="570" y="680" width="300" height="575" rx="14"/><rect class="pill" x="582" y="690" width="157" height="24" rx="12"/><text class="s-num" x="595" y="707">7</text><text class="s-title" x="610" y="707">Review Due Event</text></g>
+<g><rect class="stage" x="890" y="680" width="680" height="575" rx="14"/><rect class="pill" x="902" y="690" width="124" height="24" rx="12"/><text class="s-num" x="915" y="707">8</text><text class="s-title" x="930" y="707">Agent Review</text></g>
+<g><rect class="stage" x="1590" y="680" width="386" height="575" rx="14"/><rect class="pill" x="1602" y="690" width="157" height="24" rx="12"/><text class="s-num" x="1615" y="707">9</text><text class="s-title" x="1630" y="707">User Interaction</text></g>
+<text class="h1" x="28" y="52">Decision Debt Agent — Decision Lifecycle</text>
+<text class="h3" x="30" y="76">how a technical decision moves from raw input to approval, memory, monitoring and review · 2026-11-11</text>
+<rect class="node backend" x="1010" y="36" width="22" height="16" rx="4"/>
+<text class="legend" x="1038" y="49">deterministic backend</text>
+<rect class="node localai" x="1198.6" y="36" width="22" height="16" rx="4"/>
+<text class="legend" x="1226.6" y="49">local AI</text>
+<rect class="node external" x="1301.3999999999999" y="36" width="22" height="16" rx="4"/>
+<text class="legend" x="1329.3999999999999" y="49">external AI fallback</text>
+<rect class="node human" x="1483.3999999999999" y="36" width="22" height="16" rx="4"/>
+<text class="legend" x="1511.3999999999999" y="49">human approval</text>
+<rect class="node data" x="1625.7999999999997" y="36" width="22" height="16" rx="4"/>
+<text class="legend" x="1653.7999999999997" y="49">stored data</text>
+<rect class="node agent" x="1748.3999999999996" y="36" width="22" height="16" rx="4"/>
+<text class="legend" x="1776.3999999999996" y="49">agent analysis</text>
+<rect class="node notify" x="1890.7999999999997" y="36" width="22" height="16" rx="4"/>
+<text class="legend" x="1918.7999999999997" y="49">notification</text>
+<path class="edge c-flow thick" d="M1010,72 L1044,72" marker-end="url(#a-c-flow)"/><text class="legend" x="1052" y="76">main path</text>
+<path class="edge c-ext dashed" d="M1150,72 L1184,72" marker-end="url(#a-c-ext)"/><text class="legend" x="1192" y="76">exception</text>
+<path class="edge c-copy" d="M1290,72 L1324,72" marker-end="url(#a-c-copy)"/><text class="legend" x="1332" y="76">derived copy</text>
+<rect class="note warn" x="350" y="576" width="410" height="56" rx="10"/>
+<text class="n-sub" x="362" y="596">Escalate only when local structuring fails. Not for: zero candidates ·</text>
+<text class="n-sub" x="362" y="611">semantic/manual conditions · title fallback only · unknown metric only</text>
+<rect class="note human" x="805" y="150" width="210" height="140" rx="10"/>
+<text class="note-t" x="817" y="170">Approval gate</text>
+<text class="n-sub" x="817" y="188">Only approved candidates</text>
+<text class="n-sub" x="817" y="204">become verified Decisions.</text>
+<text class="n-sub" x="817" y="220"></text>
+<text class="n-sub" x="817" y="236">LLM output is never stored</text>
+<text class="n-sub" x="817" y="252">as a confirmed Decision</text>
+<text class="n-sub" x="817" y="268">without human approval.</text>
+<rect class="note copy" x="1380" y="380" width="576" height="62" rx="10"/>
+<text class="n-sub" x="1392" y="400">gbrain and Dify hold searchable copies of verified Decisions.</text>
+<text class="n-sub" x="1392" y="416">SQLite stays the single source of truth.</text>
+<rect class="statebox" x="44" y="952" width="486" height="112" rx="10"/>
+<text class="note-t" x="56" y="972">Review State (per Decision)</text>
+<rect class="state active" x="70" y="986" width="130" height="50" rx="25"/><text class="state-t" x="135" y="1016" text-anchor="middle">ACTIVE</text>
+<rect class="state due" x="330" y="986" width="170" height="50" rx="25"/><text class="state-t" x="415" y="1016" text-anchor="middle">REVIEW_DUE</text>
+<path class="edge c-event" d="M200,998 L330,998" marker-end="url(#a-c-event)"/><text class="edge-label" x="265" y="991" text-anchor="middle">condition true</text>
+<path class="edge c-flow" d="M330,1026 L200,1026" marker-end="url(#a-c-flow)"/><text class="edge-label" x="265" y="1048" text-anchor="middle">recovery</text>
+<rect class="note" x="44" y="1080" width="486" height="162" rx="10"/>
+<text class="note-t" x="56" y="1100">Event semantics</text>
+<text class="n-sub" x="56" y="1118">• first check already true → baseline REVIEW_DUE, no event</text>
+<text class="n-sub" x="56" y="1134">• same state on the next check → no new event</text>
+<text class="n-sub" x="56" y="1150">• REVIEW_DUE → ACTIVE → recovery (no alert)</text>
+<text class="n-sub" x="56" y="1166">• after recovery, ACTIVE → REVIEW_DUE triggers again</text>
+<text class="n-sub" x="56" y="1182"></text>
+<text class="n-sub" x="56" y="1198">Only the ACTIVE → REVIEW_DUE transition creates a</text>
+<text class="n-sub" x="56" y="1214">Review Event.</text>
+<rect class="note notify" x="588" y="740" width="244" height="150" rx="10"/>
+<text class="note-t" x="600" y="760">Notification rule</text>
+<text class="n-sub" x="600" y="778">One Telegram alert per new</text>
+<text class="n-sub" x="600" y="794">Review Event.</text>
+<text class="n-sub" x="600" y="810"></text>
+<text class="n-sub" x="600" y="826">No alert for baseline</text>
+<text class="n-sub" x="600" y="842">REVIEW_DUE, for unchanged</text>
+<text class="n-sub" x="600" y="858">state, or for recovery.</text>
+<rect class="node data" x="930" y="1092" width="630" height="152" rx="10"/>
+<g transform="translate(940,1102) scale(0.8333333333333334)" fill="none" stroke="var(--s-data)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v16H4z"/><path d="M8 9h8M8 13h8M8 17h5"/></g>
+<text class="n-title" x="968" y="1117">Review Memo</text><text class="n-sub" x="1070" y="1117">stored in SQLite</text>
+<rect class="lane facts" x="942" y="1130" width="606" height="48" rx="7"/>
+<text class="lane-t" x="954" y="1149">Authoritative facts — rendered by the backend from SQLite (Hermes cannot change them)</text>
+<text class="lane-s" x="954" y="1168">Decision · Rationale · Assumptions · Review Trigger · Observed State · Evidence</text>
+<rect class="lane ai" x="942" y="1186" width="606" height="48" rx="7"/>
+<text class="lane-t" x="954" y="1205">Hermes AI analysis</text>
+<text class="lane-s" x="954" y="1224">related knowledge · analysis · missing information · human review checks</text>
+<text class="edge-label" x="881" y="976" text-anchor="middle">Generate Memo</text>
+<text class="edge-label" x="881" y="991" text-anchor="middle">(user, Web UI)</text>
+<text class="edge-label" x="1508" y="900" text-anchor="start">question / answer</text>
+<path class="edge c-flow" d="M290,205 L350,205" marker-end="url(#a-c-flow)"/>
+<path class="edge c-flow" d="M167,346 L167,384" marker-end="url(#a-c-flow)"/>
+<path class="edge c-flow" d="M167,440 L167,478" marker-end="url(#a-c-flow)"/>
+<path class="edge c-flow" d="M290,506 L322,506 L322,236 L350,236" marker-end="url(#a-c-flow)"/>
+<path class="edge c-flow thick" d="M455,260 L455,410" marker-end="url(#a-c-flow)"/>
+<text class="edge-label" x="463" y="339.0">valid structured output</text>
+<path class="edge c-ext dashed" d="M560,214 L670,214 L670,290" marker-end="url(#a-c-ext)"/>
+<text class="edge-label" x="678" y="256.0">structuring failed</text>
+<path class="edge c-ext dashed" d="M670,390 L670,426 L560,426" marker-end="url(#a-c-ext)"/>
+<text class="edge-label" x="615.0" y="419" text-anchor="middle">structured result</text>
+<path class="edge c-flow" d="M560,486 L805,486" marker-end="url(#a-c-flow)"/>
+<text class="edge-label" x="682.5" y="479" text-anchor="middle">review</text>
+<path class="edge c-human thick" d="M1015,450 L1070,450" marker-end="url(#a-c-human)"/>
+<text class="edge-label" x="1042.5" y="443" text-anchor="middle">Approve</text>
+<path class="edge c-copy" d="M1320,340 L1350,340 L1350,205 L1380,205" marker-end="url(#a-c-copy)"/>
+<path class="edge c-copy" d="M1550,205 L1580,205" marker-end="url(#a-c-copy)"/>
+<path class="edge c-copy" d="M1760,205 L1790,205" marker-end="url(#a-c-copy)" marker-start="url(#s-c-copy)"/>
+<path class="edge c-copy" d="M1670,240 L1670,290" marker-end="url(#a-c-copy)"/>
+<path class="edge c-copy" d="M1320,505 L1380,505" marker-end="url(#a-c-copy)"/>
+<path class="edge c-copy" d="M1550,505 L1580,505" marker-end="url(#a-c-copy)"/>
+<path class="edge c-data thick" d="M1195,560 L1195,660 L345,660 L345,740" marker-end="url(#a-c-data)"/>
+<text class="edge-label" x="770.0" y="653" text-anchor="middle">verified Decision + review trigger</text>
+<path class="edge c-flow" d="M204,786 L240,786" marker-end="url(#a-c-flow)"/>
+<path class="edge c-flow" d="M345,832 L345,862" marker-end="url(#a-c-flow)"/>
+<path class="edge c-flow" d="M265,920 L265,952" marker-end="url(#a-c-flow)"/>
+<path class="edge c-event" d="M500,1006 L588,1006" marker-end="url(#a-c-event)"/>
+<path class="edge c-notify" d="M710,1040 L710,1080" marker-end="url(#a-c-notify)"/>
+<path class="edge c-notify" d="M710,1140 L710,1178" marker-end="url(#a-c-notify)"/>
+<path class="edge c-agent" d="M832,1000 L930,1000" marker-end="url(#a-c-agent)"/>
+<path class="edge c-agent" d="M1050,960 L1050,820" marker-end="url(#a-c-agent)"/>
+<path class="edge c-agent" d="M1130,960 L1130,890 L1340,890 L1340,820" marker-end="url(#a-c-agent)"/>
+<path class="edge c-agent" d="M1050,1040 L1050,1092" marker-end="url(#a-c-agent)"/>
+<path class="edge c-agent" d="M1610,790 L1500,790 L1500,1000 L1170,1000" marker-end="url(#a-c-agent)" marker-start="url(#s-c-agent)"/>
+<path class="edge c-flow" d="M1560,1135 L1610,1135" marker-end="url(#a-c-flow)"/>
+<path class="edge c-flow" d="M1783,1170 L1783,1190" marker-end="url(#a-c-flow)"/>
+<g id="n-text"><rect class="node data" x="44" y="170" width="246" height="70" rx="10"/>
+<g transform="translate(54,180) scale(0.8333333333333334)" fill="none" stroke="var(--s-data)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h6"/></g>
+<text class="n-title" x="82" y="195">Meeting Notes / Text</text>
+<text class="n-sub" x="56" y="216">text Source (meeting, issue, ADR)</text>
+</g>
+<g id="n-audio"><rect class="node data" x="44" y="290" width="246" height="56" rx="10"/>
+<g transform="translate(54,300) scale(0.8333333333333334)" fill="none" stroke="var(--s-data)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v1a7 7 0 0 0 14 0v-1M12 18v4M8 22h8"/></g>
+<text class="n-title" x="82" y="315">Audio Upload</text>
+<text class="n-sub" x="56" y="336">meeting recording</text>
+</g>
+<g id="n-whisper"><rect class="node localai" x="44" y="384" width="246" height="56" rx="10"/>
+<g transform="translate(54,394) scale(0.8333333333333334)" fill="none" stroke="var(--s-local)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/></g>
+<text class="n-title" x="82" y="409">whisper.cpp</text>
+<text class="n-sub" x="56" y="430">local speech-to-text</text>
+</g>
+<g id="n-tx"><rect class="node data" x="44" y="478" width="246" height="56" rx="10"/>
+<g transform="translate(54,488) scale(0.8333333333333334)" fill="none" stroke="var(--s-data)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h6"/></g>
+<text class="n-title" x="82" y="503">Korean Transcript</text>
+<text class="n-sub" x="56" y="524">timestamped Source text</text>
+</g>
+<g id="n-qwen"><rect class="node localai" x="350" y="170" width="210" height="90" rx="10"/>
+<g transform="translate(360,180) scale(0.8333333333333334)" fill="none" stroke="var(--s-local)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/></g>
+<text class="n-title" x="388" y="195">Qwen2.5-7B-Instruct</text>
+<text class="n-sub" x="362" y="216">local · llama-swap /</text>
+<text class="n-sub" x="362" y="232">llama.cpp :8080</text>
+</g>
+<g id="n-or"><rect class="node external" x="590" y="290" width="160" height="100" rx="10"/>
+<g transform="translate(600,300) scale(0.8333333333333334)" class="logo"><title>OpenRouter</title><path d="M16.778 1.844v1.919q-.569-.026-1.138-.032-.708-.008-1.415.037c-1.93.126-4.023.728-6.149 2.237-2.911 2.066-2.731 1.95-4.14 2.75-.396.223-1.342.574-2.185.798-.841.225-1.753.333-1.751.333v4.229s.768.108 1.61.333c.842.224 1.789.575 2.185.799 1.41.798 1.228.683 4.14 2.75 2.126 1.509 4.22 2.11 6.148 2.236.88.058 1.716.041 2.555.005v1.918l7.222-4.168-7.222-4.17v2.176c-.86.038-1.611.065-2.278.021-1.364-.09-2.417-.357-3.979-1.465-2.244-1.593-2.866-2.027-3.68-2.508.889-.518 1.449-.906 3.822-2.59 1.56-1.109 2.614-1.377 3.978-1.466.667-.044 1.418-.017 2.278.02v2.176L24 6.014Z" fill="#94A3B8"/></g>
+<text class="n-title" x="628" y="315">GLM-5.3</text>
+<text class="n-sub" x="602" y="336">OpenRouter</text>
+<text class="n-sub" x="602" y="352">exception only</text>
+</g>
+<g id="n-cand"><rect class="node data" x="350" y="410" width="210" height="150" rx="10"/>
+<g transform="translate(360,420) scale(0.8333333333333334)" fill="none" stroke="var(--s-data)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.5 5h13L22 12v6a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-6z"/></g>
+<text class="n-title" x="388" y="435">Decision Candidate</text>
+<text class="n-sub" x="362" y="456">title · decision</text>
+<text class="n-sub" x="362" y="472">rationale · assumptions</text>
+<text class="n-sub" x="362" y="488">review trigger</text>
+<text class="n-sub" x="362" y="504">source / evidence</text>
+<text class="n-sub" x="362" y="520">status: pending</text>
+</g>
+<g id="n-human"><rect class="node human" x="805" y="400" width="210" height="180" rx="10"/>
+<g transform="translate(815,410) scale(0.8333333333333334)" fill="none" stroke="var(--s-human)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="7" r="4"/><path d="M2 21v-1a6 6 0 0 1 6-6h2a6 6 0 0 1 6 6v1M16 11l2 2 4-4"/></g>
+<text class="n-title" x="843" y="425">Human Review</text>
+<text class="n-sub" x="817" y="446">Review Queue</text>
+<text class="n-sub" x="817" y="462"></text>
+<text class="n-sub" x="817" y="478">Approve → verified Decision</text>
+<text class="n-sub" x="817" y="494">Edit → fix fields, then</text>
+<text class="n-sub" x="817" y="510">   approve</text>
+<text class="n-sub" x="817" y="526">Ignore → closed, never</text>
+<text class="n-sub" x="817" y="542">   a Decision</text>
+</g>
+<g id="n-sqlite"><rect class="node data" x="1070" y="300" width="250" height="260" rx="10"/>
+<g transform="translate(1080,310) scale(0.8333333333333334)" class="logo"><title>SQLite</title><path d="M21.678.521c-1.032-.92-2.28-.55-3.513.544a8.71 8.71 0 0 0-.547.535c-2.109 2.237-4.066 6.38-4.674 9.544.237.48.422 1.093.544 1.561a13.044 13.044 0 0 1 .164.703s-.019-.071-.096-.296l-.05-.146a1.689 1.689 0 0 0-.033-.08c-.138-.32-.518-.995-.686-1.289-.143.423-.27.818-.376 1.176.484.884.778 2.4.778 2.4s-.025-.099-.147-.442c-.107-.303-.644-1.244-.772-1.464-.217.804-.304 1.346-.226 1.478.152.256.296.698.422 1.186.286 1.1.485 2.44.485 2.44l.017.224a22.41 22.41 0 0 0 .056 2.748c.095 1.146.273 2.13.5 2.657l.155-.084c-.334-1.038-.47-2.399-.41-3.967.09-2.398.642-5.29 1.661-8.304 1.723-4.55 4.113-8.201 6.3-9.945-1.993 1.8-4.692 7.63-5.5 9.788-.904 2.416-1.545 4.684-1.931 6.857.666-2.037 2.821-2.912 2.821-2.912s1.057-1.304 2.292-3.166c-.74.169-1.955.458-2.362.629-.6.251-.762.337-.762.337s1.945-1.184 3.613-1.72C21.695 7.9 24.195 2.767 21.678.521m-18.573.543A1.842 1.842 0 0 0 1.27 2.9v16.608a1.84 1.84 0 0 0 1.835 1.834h9.418a22.953 22.953 0 0 1-.052-2.707c-.006-.062-.011-.141-.016-.2a27.01 27.01 0 0 0-.473-2.378c-.121-.47-.275-.898-.369-1.057-.116-.197-.098-.31-.097-.432 0-.12.015-.245.037-.386a9.98 9.98 0 0 1 .234-1.045l.217-.028c-.017-.035-.014-.065-.031-.097l-.041-.381a32.8 32.8 0 0 1 .382-1.194l.2-.019c-.008-.016-.01-.038-.018-.053l-.043-.316c.63-3.28 2.587-7.443 4.8-9.791.066-.069.133-.128.198-.194Z" fill="#003B57"/></g>
+<text class="n-title" x="1108" y="325">Verified Decision</text>
+<text class="n-sub" x="1082" y="346">SQLite · authoritative</text>
+<text class="n-sub" x="1082" y="362"></text>
+<text class="n-sub" x="1082" y="378">human_verified = true</text>
+<text class="n-sub" x="1082" y="394">original source</text>
+<text class="n-sub" x="1082" y="410">evidence</text>
+<text class="n-sub" x="1082" y="426">review trigger</text>
+<text class="n-sub" x="1082" y="442"></text>
+<text class="n-sub" x="1082" y="458">the only confirmed copy</text>
+</g>
+<g id="n-md"><rect class="node backend" x="1380" y="170" width="170" height="70" rx="10"/>
+<g transform="translate(1390,180) scale(0.8333333333333334)" fill="none" stroke="var(--s-backend)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h6"/></g>
+<text class="n-title" x="1418" y="195">Markdown export</text>
+<text class="n-sub" x="1392" y="216">~/decision-debt-brain/</text>
+<text class="n-sub" x="1392" y="232">decisions/</text>
+</g>
+<g id="n-gbrain"><rect class="node data" x="1580" y="170" width="180" height="70" rx="10"/>
+<g transform="translate(1590,180) scale(0.8333333333333334)" fill="none" stroke="var(--s-data)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3a3 3 0 0 0-3 3 3 3 0 0 0-2 5 3 3 0 0 0 2 5 3 3 0 0 0 3 3h0a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2z"/><path d="M15 3a3 3 0 0 1 3 3 3 3 0 0 1 2 5 3 3 0 0 1-2 5 3 3 0 0 1-3 3h0a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/></g>
+<text class="n-title" x="1618" y="195">gbrain</text>
+<text class="n-sub" x="1592" y="216">source decision-debt</text>
+<text class="n-sub" x="1592" y="232">derived copy</text>
+</g>
+<g id="n-emb"><rect class="node localai" x="1790" y="170" width="166" height="86" rx="10"/>
+<g transform="translate(1800,180) scale(0.8333333333333334)" fill="none" stroke="var(--s-local)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/></g>
+<text class="n-title" x="1828" y="195">qwen3-embedding</text>
+<text class="n-sub" x="1802" y="216">0.6b · local</text>
+<text class="n-sub" x="1802" y="232">1024-dim vectors</text>
+</g>
+<g id="n-search"><rect class="node backend" x="1580" y="290" width="180" height="60" rx="10"/>
+<g transform="translate(1590,300) scale(0.8333333333333334)" fill="none" stroke="var(--s-backend)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></g>
+<text class="n-title" x="1618" y="315">Semantic Search</text>
+<text class="n-sub" x="1592" y="336">over past Decisions</text>
+</g>
+<g id="n-difysync"><rect class="node backend" x="1380" y="470" width="170" height="70" rx="10"/>
+<g transform="translate(1390,480) scale(0.8333333333333334)" fill="none" stroke="var(--s-backend)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M7 6.5h.01M7 17.5h.01"/></g>
+<text class="n-title" x="1418" y="495">Dify sync</text>
+<text class="n-sub" x="1392" y="516">Knowledge copy</text>
+<text class="n-sub" x="1392" y="532">on approval</text>
+</g>
+<g id="n-difykb"><rect class="node data" x="1580" y="470" width="180" height="70" rx="10"/>
+<g transform="translate(1590,480) scale(0.8333333333333334)" class="logo"><title>Dify</title><path d="m22.417 9.334-1.333 4.333-1.334-4.333h-1.583L20.1 14.94c.2.583-.14 1.06-.756 1.06h-.678v1.334h.996c.869 0 1.65-.55 1.945-1.367L24 9.334ZM2.833 6.667H0v8.666h2.833c3.5 0 4.5-2 4.5-4.333s-1-4.334-4.5-4.334zM2.866 14H1.6V8h1.266c2.013 0 2.867.988 2.867 3s-.854 3-2.867 3m11-5.267v.6h-1.532v1.334h1.533V14h-2.534V9.334H8v1.334h1.867V14h-2.2v1.334h10V14h-2.332v-3.333h2.333V9.334h-2.333V8h2.333V6.667h-1.733a2.07 2.07 0 0 0-2.067 2.067Zm-3.266-.2c.681 0 .933-.417.933-.933 0-.515-.252-.933-.933-.933-.68 0-.934.418-.934.933s.253.934.934.934" fill="#0033FF"/></g>
+<text class="n-title" x="1618" y="495">Dify Knowledge Base</text>
+<text class="n-sub" x="1592" y="516">derived copy</text>
+</g>
+<g id="n-resolver"><rect class="node backend" x="44" y="740" width="160" height="92" rx="10"/>
+<g transform="translate(54,750) scale(0.8333333333333334)" fill="none" stroke="var(--s-backend)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 14l4-4"/><path d="M3.3 19a10 10 0 1 1 17.4 0z"/></g>
+<text class="n-title" x="82" y="765">State Resolver</text>
+<text class="n-sub" x="56" y="786">:8000 · user_count</text>
+<text class="n-sub" x="56" y="802">search_api_p95_ms</text>
+<text class="n-sub" x="56" y="818">server_count</text>
+</g>
+<g id="n-monitor"><rect class="node backend" x="240" y="740" width="210" height="92" rx="10"/>
+<g transform="translate(250,750) scale(0.8333333333333334)" fill="none" stroke="var(--s-backend)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></g>
+<text class="n-title" x="278" y="765">Review Monitor</text>
+<text class="n-sub" x="252" y="786">every 30s · Decisions</text>
+<text class="n-sub" x="252" y="802">with a review trigger</text>
+</g>
+<g id="n-eval"><rect class="node backend" x="240" y="862" width="210" height="58" rx="10"/>
+<g transform="translate(250,872) scale(0.8333333333333334)" fill="none" stroke="var(--s-backend)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></g>
+<text class="n-title" x="278" y="887">Trigger Evaluation</text>
+<text class="n-sub" x="252" y="908">deterministic · no LLM</text>
+</g>
+<g id="n-event"><rect class="node data" x="588" y="960" width="244" height="80" rx="10"/>
+<g transform="translate(598,970) scale(0.8333333333333334)" fill="none" stroke="var(--s-data)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.9 1.9 0 0 0 3.4 0"/></g>
+<text class="n-title" x="626" y="985">Review Event created</text>
+<text class="n-sub" x="600" y="1006">new ACTIVE → REVIEW_DUE</text>
+<text class="n-sub" x="600" y="1022">transition only</text>
+</g>
+<g id="n-send"><rect class="node notify" x="588" y="1080" width="244" height="60" rx="10"/>
+<g transform="translate(598,1090) scale(0.8333333333333334)" fill="none" stroke="var(--s-notify)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4z"/></g>
+<text class="n-title" x="626" y="1105">hermes send --to telegram</text>
+<text class="n-sub" x="600" y="1126">once per new Review Event</text>
+</g>
+<g id="n-alert"><rect class="node notify" x="588" y="1178" width="244" height="64" rx="10"/>
+<g transform="translate(598,1188) scale(0.8333333333333334)" class="logo"><title>Telegram</title><path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z" fill="#26A5E4"/></g>
+<text class="n-title" x="626" y="1203">Telegram Alert</text>
+<text class="n-sub" x="600" y="1224">no repeats while REVIEW_DUE</text>
+</g>
+<g id="n-ddmcp"><rect class="node agent" x="930" y="740" width="240" height="80" rx="10"/>
+<g transform="translate(940,750) scale(0.8333333333333334)" fill="none" stroke="var(--s-agent)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M7 6.5h.01M7 17.5h.01"/></g>
+<text class="n-title" x="968" y="765">Decision Debt MCP</text>
+<text class="n-sub" x="942" y="786">read-only · current Decision,</text>
+<text class="n-sub" x="942" y="802">trigger, observed state</text>
+</g>
+<g id="n-gbmcp"><rect class="node agent" x="1220" y="740" width="240" height="80" rx="10"/>
+<g transform="translate(1230,750) scale(0.8333333333333334)" fill="none" stroke="var(--s-agent)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M7 6.5h.01M7 17.5h.01"/></g>
+<text class="n-title" x="1258" y="765">gbrain MCP</text>
+<text class="n-sub" x="1232" y="786">read-only · related past</text>
+<text class="n-sub" x="1232" y="802">Decisions / knowledge</text>
+</g>
+<g id="n-hermes"><rect class="node agent" x="930" y="960" width="240" height="80" rx="10"/>
+<g transform="translate(940,970) scale(0.8333333333333334)" fill="none" stroke="var(--s-agent)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="7" width="16" height="12" rx="3"/><path d="M12 3v4M9 12h.01M15 12h.01M9 16h6"/></g>
+<text class="n-title" x="968" y="985">Hermes</text>
+<text class="n-sub" x="942" y="1006">analysis only · cannot</text>
+<text class="n-sub" x="942" y="1022">change Decisions</text>
+</g>
+<g id="n-tgq"><rect class="node notify" x="1610" y="740" width="346" height="100" rx="10"/>
+<g transform="translate(1620,750) scale(0.8333333333333334)" class="logo"><title>Telegram</title><path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z" fill="#26A5E4"/></g>
+<text class="n-title" x="1648" y="765">Telegram Q&amp;A</text>
+<text class="n-sub" x="1622" y="786">after an alert, the user asks a question</text>
+<text class="n-sub" x="1622" y="802">→ Hermes answers using Decision Debt MCP</text>
+<text class="n-sub" x="1622" y="818">+ gbrain MCP</text>
+</g>
+<g id="n-web"><rect class="node backend" x="1610" y="1100" width="346" height="70" rx="10"/>
+<g transform="translate(1620,1110) scale(0.8333333333333334)" class="logo" data-dark=""><title>Next.js</title><path d="M18.665 21.978C16.758 23.255 14.465 24 12 24 5.377 24 0 18.623 0 12S5.377 0 12 0s12 5.377 12 12c0 3.583-1.574 6.801-4.067 9.001L9.219 7.2H7.2v9.596h1.615V9.251l9.85 12.727Zm-3.332-8.533 1.6 2.061V7.2h-1.6v6.245Z" fill="#000000"/></g>
+<text class="n-title" x="1648" y="1125">Web UI</text>
+<text class="n-sub" x="1622" y="1146">Review Due Decision → Review Memo</text>
+</g>
+<g id="n-reeval"><rect class="node human" x="1610" y="1190" width="346" height="56" rx="10"/>
+<g transform="translate(1620,1200) scale(0.8333333333333334)" fill="none" stroke="var(--s-human)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="7" r="4"/><path d="M2 21v-1a6 6 0 0 1 6-6h2a6 6 0 0 1 6 6v1M16 11l2 2 4-4"/></g>
+<text class="n-title" x="1648" y="1215">Human re-evaluation</text>
+<text class="n-sub" x="1622" y="1236">the final decision stays with people</text>
+</g>
+</svg></div>
+<!-- Logos: Simple Icons 16.37.0 (brand marks belong to their owners). Generic icons for project-specific steps. -->
+</body></html>

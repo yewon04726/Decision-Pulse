@@ -1,0 +1,6 @@
+fastapi==0.143.0
+uvicorn[standard]==0.54.0
+httpx==0.28.1
+python-multipart==0.0.33
+# read-only MCP server (mcp_server.py, Hermes용 stdio). 2.x: FastMCP → mcp.server.mcpserver.MCPServer
+mcp==2.3.0

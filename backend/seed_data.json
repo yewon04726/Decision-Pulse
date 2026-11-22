@@ -1,0 +1,431 @@
+{
+  "sources": [
+    {
+      "id": "adr_01_storage",
+      "title": "adr_01_storage.md",
+      "type": "adr",
+      "date": null,
+      "summary": "ADR-001 파일 저장소 선택",
+      "content": "문서: ADR-001 파일 저장소 선택 | 주제: 파일 저장소 | 결정: 초기에는 로컬 디스크에 첨부 파일을 저장한다. | 이유: MVP 단계에서 구현이 가장 단순하고 파일 수가 많지 않을 것으로 예상되며 외부 스토리지 비용을 최소화할 수 있다. | 영향: 서버가 여러 대로 늘어나면 파일 접근 경로가 일관되지 않을 수 있다. | 재검토 조건: 운영 서버가 2대 이상으로 확장되면 S3 호환 Object Storage로 이전을 검토한다. | 상태: Accepted.",
+      "human_authored": true
+    },
+    {
+      "id": "adr_02_api_version",
+      "title": "adr_02_api_version.md",
+      "type": "adr",
+      "date": null,
+      "summary": "ADR-002 API 버전 관리 정책",
+      "content": "문서: ADR-002 API 버전 관리 정책 | 주제: API 버전 | 결정: MVP 기간에는 /api/v1 경로를 고정해서 사용한다. | 이유: 프론트엔드와 백엔드 간 계약을 단순하게 유지하고 초기부터 복수 버전을 동시에 운영하는 비용을 피할 수 있다. | 재검토 조건: 외부 파트너가 API를 직접 사용하기 시작하거나 하위 호환성을 깨는 변경이 필요해지면 새로운 API 버전 도입을 검토한다. | 비고: 단순한 내부 리팩터링은 버전 변경 조건이 아니다. | 상태: Accepted.",
+      "human_authored": true
+    },
+    {
+      "id": "issue_01_database_scale",
+      "title": "issue_01_database_scale.md",
+      "type": "issue",
+      "date": null,
+      "summary": "Issue #42 데이터베이스 확장성 점검",
+      "content": "문서: Issue #42 데이터베이스 확장성 점검 | 주제: 데이터베이스 재검토 상태 | 기존 결정: 2026-03-14 회의에서 MVP는 SQLite를 사용하기로 했다. | 기존 재검토 조건: 가입자 수가 1,000명을 초과하면 PostgreSQL 도입을 재검토한다. | 현재 상태: 이 문서에는 실제 가입자 수가 기록되어 있지 않다. | 판단: 현재 문서만으로 재검토 조건 충족 여부를 확정할 수 없으며 실제 가입자 수 확인이 필요하다.",
+      "human_authored": true
+    },
+    {
+      "id": "issue_02_redis",
+      "title": "issue_02_redis.md",
+      "type": "issue",
+      "date": null,
+      "summary": "Issue #57 Redis 도입 검토 요청",
+      "content": "문서: Issue #57 Redis 도입 검토 요청 | 주제: Redis 재검토 상태 | 기존 결정: Redis는 즉시 도입하지 않는다. | 기존 재검토 조건: 검색 API의 p95 응답 시간이 800ms를 초과하는 상태가 3일 이상 지속되면 Redis 도입을 검토한다. | 현재 상태: 이 문서에는 최근 p95 응답 시간과 지속 기간 측정값이 포함되어 있지 않다. | 판단: 현재 문서만으로 Redis 도입 조건 충족 여부를 판단할 수 없으며 실제 모니터링 지표 확인이 필요하다.",
+      "human_authored": true
+    },
+    {
+      "id": "meeting_01_database",
+      "title": "meeting_01_database.md",
+      "type": "meeting",
+      "date": "2026-03-14",
+      "summary": "2026-03-14 인프라 회의",
+      "content": "문서: 2026-03-14 인프라 회의 | 주제: 데이터베이스 | 결정: MVP에서는 SQLite를 사용한다. | 이유: 별도 DB 서버 운영 없이 초기 개발 속도를 높일 수 있고, 현재 예상 데이터 규모와 동시 접속 수준에서는 충분하다고 판단했다. | 전제: 초기 가입자 수와 쓰기 트래픽이 많지 않고 단일 인스턴스 환경을 유지한다. | 재검토 조건: 가입자 수가 1,000명을 초과하면 PostgreSQL 도입을 다시 검토한다. | 상태: 활성.",
+      "human_authored": true
+    },
+    {
+      "id": "meeting_02_cache",
+      "title": "meeting_02_cache.md",
+      "type": "meeting",
+      "date": "2026-03-21",
+      "summary": "2026-03-21 백엔드 회의",
+      "content": "문서: 2026-03-21 백엔드 회의 | 주제: 캐시 | 결정: 당장은 Redis를 도입하지 않고 애플리케이션 내부 캐시만 사용한다. | 이유: 운영 인프라를 최소화하고, 현재 병목이 DB인지 외부 API인지 명확하지 않으며, 초기에는 캐시 일관성 문제를 피하는 것이 더 중요하다. | 재검토 조건: 검색 API의 p95 응답 시간이 800ms를 초과하는 상태가 3일 이상 지속되면 Redis 도입을 검토한다. | 상태: 활성.",
+      "human_authored": true
+    },
+    {
+      "id": "meeting_03_auth_v2",
+      "title": "meeting_03_auth_v2.md",
+      "type": "meeting",
+      "date": "2026-03-28",
+      "summary": "2026-03-28 인증 방식 논의",
+      "content": "문서: 2026-03-28 인증 방식 논의 | 주제: 인증 | 결정: 초기 인증은 Google과 GitHub 외부 OAuth 로그인만 지원한다. | 이유: 비밀번호 저장·재설정 기능을 직접 구현하지 않아도 되어 초기 보안 부담과 개발 비용을 줄일 수 있다. | 재검토 조건: 기업 고객이 자체 계정 체계 또는 SSO를 요구하면 인증 구조를 다시 검토한다. | 비고: 이 결정은 사용자 수가 아니라 고객 요구사항 변화에 의해 재검토된다.",
+      "human_authored": true
+    },
+    {
+      "id": "meeting_04_logging",
+      "title": "meeting_04_logging.md",
+      "type": "meeting",
+      "date": "2026-04-04",
+      "summary": "2026-04-04 운영 회의",
+      "content": "문서: 2026-04-04 운영 회의 | 주제: 로깅 | 결정: MVP 기간에는 애플리케이션 로그를 stdout으로 출력하고 Docker 로그를 통해 확인한다. | 이유: 별도의 로그 수집 시스템을 운영하지 않아도 되고 초기 트래픽에서는 로그 양이 적으며 최소 장애 분석 정보는 확보할 수 있다. | 재검토 조건: 일일 로그 발생량이 5GB를 초과하거나 장애 분석에 30분 이상 소요되는 사례가 월 3회 이상 발생하면 중앙 로그 수집 시스템 도입을 검토한다. | 후보: Loki 또는 OpenSearch.",
+      "human_authored": true
+    },
+    {
+      "id": "meeting_05_deploy",
+      "title": "meeting_05_deploy.md",
+      "type": "meeting",
+      "date": "2026-04-11",
+      "summary": "2026-04-11 배포 전략 회의",
+      "content": "문서: 2026-04-11 배포 전략 회의 | 주제: 배포 | 결정: 현재는 단일 운영 환경에 수동 배포한다. | 이유: 초기에는 CI/CD 구축 비용보다 제품 개발이 우선이고 배포 담당자가 명확하며 배포 횟수도 적다. | 재검토 조건: 주간 운영 배포 횟수가 5회를 초과하면 GitHub Actions 기반 자동 배포 파이프라인을 도입한다. | 비고: 긴급 수정 배포 횟수는 일반 배포 횟수와 별도로 기록한다.",
+      "human_authored": true
+    },
+    {
+      "id": "meeting_06_monitoring",
+      "title": "meeting_06_monitoring.md",
+      "type": "meeting",
+      "date": "2026-04-18",
+      "summary": "2026-04-18 모니터링 회의",
+      "content": "문서: 2026-04-18 모니터링 회의 | 주제: 모니터링 | 결정: 현재는 CPU 사용률, 메모리 사용률, API 오류율 세 가지 지표만 수집한다. | 이유: 초기에는 핵심 장애 징후만 확인하고 지표 관리 부담을 줄이는 것이 우선이다. | 재검토 조건: 운영 중 장애가 발생했지만 기존 세 지표만으로 원인을 파악하지 못한 사례가 2회 이상 발생하면 모니터링 지표를 확대한다. | 후보 지표: DB connection 수, API latency, queue length, 외부 API 오류율.",
+      "human_authored": true
+    }
+  ],
+  "decisions": [
+    {
+      "id": "DEC-2026-0314-DB",
+      "topic": "database",
+      "title": "SQLite",
+      "decision": "MVP에서는 SQLite를 사용한다.",
+      "rationale": "별도 DB 서버 운영 없이 초기 개발 속도를 높일 수 있고, 현재 예상 데이터 규모와 동시 접속 수준에서는 충분하다고 판단했다.",
+      "assumptions": [
+        "초기 가입자 수와 쓰기 트래픽이 많지 않고 단일 인스턴스 환경을 유지한다."
+      ],
+      "notes": [],
+      "review_trigger": {
+        "type": "metric",
+        "metric": "user_count",
+        "operator": ">",
+        "threshold": 1000,
+        "description": "가입자 수가 1,000명을 초과하면 PostgreSQL 도입을 다시 검토한다."
+      },
+      "status": "active",
+      "origin": "seed_document",
+      "human_verified": false,
+      "evidence": [
+        {
+          "source_id": "meeting_01_database",
+          "quote": "가입자 수가 1,000명을 초과하면 PostgreSQL 도입을 다시 검토한다."
+        },
+        {
+          "source_id": "issue_01_database_scale",
+          "quote": "가입자 수가 1,000명을 초과하면 PostgreSQL 도입을 재검토한다."
+        },
+        {
+          "source_id": "issue_01_database_scale",
+          "quote": "현재 문서만으로 재검토 조건 충족 여부를 확정할 수 없으며 실제 가입자 수 확인이 필요하다."
+        }
+      ],
+      "superseded_by": null,
+      "created_at": "2026-03-14",
+      "updated_at": "2026-03-14",
+      "history": [
+        {
+          "date": "2026-03-14",
+          "actor": "meeting_01_database.md",
+          "action": "결정 기록",
+          "note": "2026-03-14 인프라 회의"
+        },
+        {
+          "date": null,
+          "actor": "issue_01_database_scale.md",
+          "action": "재검토 상태 점검",
+          "note": "Issue #42 데이터베이스 확장성 점검"
+        }
+      ]
+    },
+    {
+      "id": "DEC-2026-0321-CACHE",
+      "topic": "cache",
+      "title": "내부 캐시 (Redis 미도입)",
+      "decision": "당장은 Redis를 도입하지 않고 애플리케이션 내부 캐시만 사용한다.",
+      "rationale": "운영 인프라를 최소화하고, 현재 병목이 DB인지 외부 API인지 명확하지 않으며, 초기에는 캐시 일관성 문제를 피하는 것이 더 중요하다.",
+      "assumptions": [],
+      "notes": [],
+      "review_trigger": {
+        "type": "metric",
+        "metric": "search_api_p95_ms",
+        "operator": ">",
+        "threshold": 800,
+        "note": "원문 조건은 '3일 이상 지속'이지만 check_metric은 현재값만 제공하므로 지속 기간은 사람이 확인해야 한다.",
+        "description": "검색 API의 p95 응답 시간이 800ms를 초과하는 상태가 3일 이상 지속되면 Redis 도입을 검토한다."
+      },
+      "status": "active",
+      "origin": "seed_document",
+      "human_verified": false,
+      "evidence": [
+        {
+          "source_id": "meeting_02_cache",
+          "quote": "검색 API의 p95 응답 시간이 800ms를 초과하는 상태가 3일 이상 지속되면 Redis 도입을 검토한다."
+        },
+        {
+          "source_id": "issue_02_redis",
+          "quote": "검색 API의 p95 응답 시간이 800ms를 초과하는 상태가 3일 이상 지속되면 Redis 도입을 검토한다."
+        },
+        {
+          "source_id": "issue_02_redis",
+          "quote": "현재 문서만으로 Redis 도입 조건 충족 여부를 판단할 수 없으며 실제 모니터링 지표 확인이 필요하다."
+        }
+      ],
+      "superseded_by": null,
+      "created_at": "2026-03-21",
+      "updated_at": "2026-03-21",
+      "history": [
+        {
+          "date": "2026-03-21",
+          "actor": "meeting_02_cache.md",
+          "action": "결정 기록",
+          "note": "2026-03-21 백엔드 회의"
+        },
+        {
+          "date": null,
+          "actor": "issue_02_redis.md",
+          "action": "재검토 상태 점검",
+          "note": "Issue #57 Redis 도입 검토 요청"
+        }
+      ]
+    },
+    {
+      "id": "DEC-2026-0328-AUTH",
+      "topic": "auth",
+      "title": "Google · GitHub OAuth",
+      "decision": "초기 인증은 Google과 GitHub 외부 OAuth 로그인만 지원한다.",
+      "rationale": "비밀번호 저장·재설정 기능을 직접 구현하지 않아도 되어 초기 보안 부담과 개발 비용을 줄일 수 있다.",
+      "assumptions": [],
+      "notes": [
+        {
+          "label": "비고",
+          "text": "이 결정은 사용자 수가 아니라 고객 요구사항 변화에 의해 재검토된다."
+        }
+      ],
+      "review_trigger": {
+        "type": "manual",
+        "description": "기업 고객이 자체 계정 체계 또는 SSO를 요구하면 인증 구조를 다시 검토한다."
+      },
+      "status": "active",
+      "origin": "seed_document",
+      "human_verified": false,
+      "evidence": [
+        {
+          "source_id": "meeting_03_auth_v2",
+          "quote": "기업 고객이 자체 계정 체계 또는 SSO를 요구하면 인증 구조를 다시 검토한다."
+        }
+      ],
+      "superseded_by": null,
+      "created_at": "2026-03-28",
+      "updated_at": "2026-03-28",
+      "history": [
+        {
+          "date": "2026-03-28",
+          "actor": "meeting_03_auth_v2.md",
+          "action": "결정 기록",
+          "note": "2026-03-28 인증 방식 논의"
+        }
+      ]
+    },
+    {
+      "id": "DEC-2026-0404-LOG",
+      "topic": "logging",
+      "title": "stdout + Docker 로그",
+      "decision": "MVP 기간에는 애플리케이션 로그를 stdout으로 출력하고 Docker 로그를 통해 확인한다.",
+      "rationale": "별도의 로그 수집 시스템을 운영하지 않아도 되고 초기 트래픽에서는 로그 양이 적으며 최소 장애 분석 정보는 확보할 수 있다.",
+      "assumptions": [],
+      "notes": [
+        {
+          "label": "후보",
+          "text": "Loki 또는 OpenSearch."
+        }
+      ],
+      "review_trigger": {
+        "type": "manual",
+        "description": "일일 로그 발생량이 5GB를 초과하거나 장애 분석에 30분 이상 소요되는 사례가 월 3회 이상 발생하면 중앙 로그 수집 시스템 도입을 검토한다."
+      },
+      "status": "active",
+      "origin": "seed_document",
+      "human_verified": false,
+      "evidence": [
+        {
+          "source_id": "meeting_04_logging",
+          "quote": "일일 로그 발생량이 5GB를 초과하거나 장애 분석에 30분 이상 소요되는 사례가 월 3회 이상 발생하면 중앙 로그 수집 시스템 도입을 검토한다."
+        }
+      ],
+      "superseded_by": null,
+      "created_at": "2026-04-04",
+      "updated_at": "2026-04-04",
+      "history": [
+        {
+          "date": "2026-04-04",
+          "actor": "meeting_04_logging.md",
+          "action": "결정 기록",
+          "note": "2026-04-04 운영 회의"
+        }
+      ]
+    },
+    {
+      "id": "DEC-2026-0411-DEPLOY",
+      "topic": "deploy",
+      "title": "단일 환경 수동 배포",
+      "decision": "현재는 단일 운영 환경에 수동 배포한다.",
+      "rationale": "초기에는 CI/CD 구축 비용보다 제품 개발이 우선이고 배포 담당자가 명확하며 배포 횟수도 적다.",
+      "assumptions": [],
+      "notes": [
+        {
+          "label": "비고",
+          "text": "긴급 수정 배포 횟수는 일반 배포 횟수와 별도로 기록한다."
+        }
+      ],
+      "review_trigger": {
+        "type": "manual",
+        "description": "주간 운영 배포 횟수가 5회를 초과하면 GitHub Actions 기반 자동 배포 파이프라인을 도입한다."
+      },
+      "status": "active",
+      "origin": "seed_document",
+      "human_verified": false,
+      "evidence": [
+        {
+          "source_id": "meeting_05_deploy",
+          "quote": "주간 운영 배포 횟수가 5회를 초과하면 GitHub Actions 기반 자동 배포 파이프라인을 도입한다."
+        }
+      ],
+      "superseded_by": null,
+      "created_at": "2026-04-11",
+      "updated_at": "2026-04-11",
+      "history": [
+        {
+          "date": "2026-04-11",
+          "actor": "meeting_05_deploy.md",
+          "action": "결정 기록",
+          "note": "2026-04-11 배포 전략 회의"
+        }
+      ]
+    },
+    {
+      "id": "DEC-2026-0418-MON",
+      "topic": "monitoring",
+      "title": "CPU · 메모리 · API 오류율",
+      "decision": "현재는 CPU 사용률, 메모리 사용률, API 오류율 세 가지 지표만 수집한다.",
+      "rationale": "초기에는 핵심 장애 징후만 확인하고 지표 관리 부담을 줄이는 것이 우선이다.",
+      "assumptions": [],
+      "notes": [
+        {
+          "label": "후보 지표",
+          "text": "DB connection 수, API latency, queue length, 외부 API 오류율."
+        }
+      ],
+      "review_trigger": {
+        "type": "manual",
+        "description": "운영 중 장애가 발생했지만 기존 세 지표만으로 원인을 파악하지 못한 사례가 2회 이상 발생하면 모니터링 지표를 확대한다."
+      },
+      "status": "active",
+      "origin": "seed_document",
+      "human_verified": false,
+      "evidence": [
+        {
+          "source_id": "meeting_06_monitoring",
+          "quote": "운영 중 장애가 발생했지만 기존 세 지표만으로 원인을 파악하지 못한 사례가 2회 이상 발생하면 모니터링 지표를 확대한다."
+        }
+      ],
+      "superseded_by": null,
+      "created_at": "2026-04-18",
+      "updated_at": "2026-04-18",
+      "history": [
+        {
+          "date": "2026-04-18",
+          "actor": "meeting_06_monitoring.md",
+          "action": "결정 기록",
+          "note": "2026-04-18 모니터링 회의"
+        }
+      ]
+    },
+    {
+      "id": "DEC-ADR-001-STORAGE",
+      "topic": "storage",
+      "title": "로컬 디스크 저장",
+      "decision": "초기에는 로컬 디스크에 첨부 파일을 저장한다.",
+      "rationale": "MVP 단계에서 구현이 가장 단순하고 파일 수가 많지 않을 것으로 예상되며 외부 스토리지 비용을 최소화할 수 있다.",
+      "assumptions": [],
+      "notes": [
+        {
+          "label": "영향",
+          "text": "서버가 여러 대로 늘어나면 파일 접근 경로가 일관되지 않을 수 있다."
+        }
+      ],
+      "review_trigger": {
+        "type": "metric",
+        "metric": "server_count",
+        "operator": ">=",
+        "threshold": 2,
+        "note": "원문 '운영 서버가 2대 이상으로 확장되면'을 server_count >= 2 로 해석했다.",
+        "description": "운영 서버가 2대 이상으로 확장되면 S3 호환 Object Storage로 이전을 검토한다."
+      },
+      "status": "active",
+      "origin": "seed_document",
+      "human_verified": false,
+      "evidence": [
+        {
+          "source_id": "adr_01_storage",
+          "quote": "운영 서버가 2대 이상으로 확장되면 S3 호환 Object Storage로 이전을 검토한다."
+        }
+      ],
+      "superseded_by": null,
+      "created_at": null,
+      "updated_at": null,
+      "history": [
+        {
+          "date": null,
+          "actor": "adr_01_storage.md",
+          "action": "결정 기록",
+          "note": "ADR-001 파일 저장소 선택"
+        }
+      ]
+    },
+    {
+      "id": "DEC-ADR-002-API",
+      "topic": "api",
+      "title": "/api/v1 고정",
+      "decision": "MVP 기간에는 /api/v1 경로를 고정해서 사용한다.",
+      "rationale": "프론트엔드와 백엔드 간 계약을 단순하게 유지하고 초기부터 복수 버전을 동시에 운영하는 비용을 피할 수 있다.",
+      "assumptions": [],
+      "notes": [
+        {
+          "label": "비고",
+          "text": "단순한 내부 리팩터링은 버전 변경 조건이 아니다."
+        }
+      ],
+      "review_trigger": {
+        "type": "manual",
+        "description": "외부 파트너가 API를 직접 사용하기 시작하거나 하위 호환성을 깨는 변경이 필요해지면 새로운 API 버전 도입을 검토한다."
+      },
+      "status": "active",
+      "origin": "seed_document",
+      "human_verified": false,
+      "evidence": [
+        {
+          "source_id": "adr_02_api_version",
+          "quote": "외부 파트너가 API를 직접 사용하기 시작하거나 하위 호환성을 깨는 변경이 필요해지면 새로운 API 버전 도입을 검토한다."
+        }
+      ],
+      "superseded_by": null,
+      "created_at": null,
+      "updated_at": null,
+      "history": [
+        {
+          "date": null,
+          "actor": "adr_02_api_version.md",
+          "action": "결정 기록",
+          "note": "ADR-002 API 버전 관리 정책"
+        }
+      ]
+    }
+  ]
+}

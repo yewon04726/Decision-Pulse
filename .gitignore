@@ -1,0 +1,31 @@
+# runtime / local state
+logs/
+.run/
+backups/
+*.bak-*
+.DS_Store
+
+# secrets
+.env
+.env.*
+!.env.example
+
+# backend local data (DB, audio, experiment results)
+backend/.venv/
+__pycache__/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+backend/data/
+backend/results/
+
+# web
+web/node_modules/
+web/.next/
+web/out/
+*.tsbuildinfo
+
+# local agent skills
+.agents/
+skills-lock.json

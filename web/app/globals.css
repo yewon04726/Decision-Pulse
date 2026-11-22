@@ -1,0 +1,88 @@
+@import "tailwindcss";
+
+/*
+ * Decision Pulse design tokens.
+ * Monochrome editorial: ink / paper / hairlines. Accent(orange) is reserved for REVIEW_DUE / warnings only.
+ * Utilities: bg-paper, text-ink, text-muted, border-line, bg-soft, text-accent-ink ...
+ */
+@theme inline {
+  --font-sans: var(--font-geist-sans), "Apple SD Gothic Neo", "Pretendard", "Noto Sans KR", system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, "SF Mono", Menlo, monospace;
+
+  --color-paper: #f8f8f6;
+  --color-surface: #ffffff;
+  --color-soft: #f2f2ef;
+  --color-ink: #111111;
+  --color-ink-2: #3a3a38;
+  --color-muted: #6b6b68;
+  --color-faint: #9a9a96;
+  --color-line: #e5e5e2;
+  --color-line-strong: #d4d4cf;
+
+  /* 상태 전달 전용 */
+  --color-accent: #e2571b;
+  --color-accent-ink: #b4410c;
+  --color-accent-soft: #fdf1ea;
+  --color-ok: #3b9b6b;
+  --color-danger: #b42318;
+  --color-danger-soft: #fdf2f0;
+
+  --ease-out-soft: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+/* MVP는 라이트 테마 고정 */
+:root {
+  color-scheme: light;
+}
+
+body {
+  background: var(--color-paper);
+  color: var(--color-ink);
+  font-feature-settings: "ss01", "cv11";
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-ink);
+  outline-offset: 2px;
+}
+
+::selection {
+  background: #1111111a;
+}
+
+/* 작은 uppercase 라벨 */
+@utility eyebrow {
+  font-size: 11px;
+  line-height: 1.2;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--color-muted);
+}
+
+/* 화면 진입: 아래에서 8px 떠오르며 나타남 (페이지/패널 교체) */
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@utility animate-rise {
+  animation: rise 0.45s var(--ease-out-soft) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-delay: 0ms !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
