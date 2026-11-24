@@ -38,33 +38,18 @@ DIFY_KNOWLEDGE_TIMEOUT = float(os.environ.get("DIFY_KNOWLEDGE_TIMEOUT", "30"))
 METRIC_TOOL_URL = os.environ.get("METRIC_TOOL_URL", "http://localhost:8000").rstrip("/")
 METRIC_TOOL_TIMEOUT = float(os.environ.get("METRIC_TOOL_TIMEOUT", "3"))
 
-# check_metric 서버에 목록 API가 없으므로 조회 대상 지표를 여기서 관리한다.
-KNOWN_METRICS = ["user_count", "search_api_p95_ms", "server_count"]
+# 지표 정의는 metric_registry.py (Canonical Metric Registry)에 있다. 아래 값은 기존 코드 호환용으로 registry에서 만든다.
+# KNOWN_METRICS = resolver가 연결된(자동 평가 가능한) 지표. 연결 안 된 canonical 지표(예: deployment_count)는 포함하지 않는다.
+import metric_registry as _registry  # noqa: E402
+
+KNOWN_METRICS = _registry.connected_names()
 
 # Decision Extraction: 원문의 지표 표현(raw_metric) → 등록된 지표 키. LLM이 아니라 backend 코드가 매핑한다.
 # 공백/대소문자/괄호를 무시한 '완전 일치'만 매핑한다 (부분 일치 X: "동시 사용자 수"는 user_count가 아니다).
-# 여기에 없는 표현은 metric_key=null, needs_mapping=true로 남는다. 새 표현은 이 목록에 추가한다.
-METRIC_ALIASES = {
-    "user_count": [
-        "사용자 수", "가입자 수", "회원 수", "유저 수", "현재 사용자 수", "현재 가입자 수", "현재 회원 수", "전체 사용자 수",
-        "전체 가입자 수", "누적 가입자 수", "실제 사용자 수", "사용자", "가입자", "회원", "user count", "users",
-    ],
-    "search_api_p95_ms": [
-        "검색 API p95", "검색 API p95 응답시간", "검색 API p95 응답 시간", "검색 API p95 latency",
-        "검색 API의 p95", "검색 API의 p95 응답시간", "검색 API의 p95 응답 시간", "검색 API의 p95 latency",
-        "검색 API 응답시간 p95", "검색 API 응답 시간 p95", "검색 API의 응답시간 p95", "검색 p95", "검색 p95 응답시간",
-    ],
-    "server_count": [
-        "서버 수", "서버 대수", "운영 서버 수", "운영 서버 대수", "프로덕션 서버 수", "프로덕션 서버 대수",
-        "운영 서버", "서버", "server count", "servers",
-    ],
-}
+# 새 표현/새 지표는 metric_registry.REGISTRY에 추가한다 (resolver가 없으면 NEEDS_MAPPING으로 저장·관리된다).
+METRIC_ALIASES = _registry.aliases_by_metric(KNOWN_METRICS)
 # 지표별로 허용하는 단위. raw_metric이 일치해도 단위가 다르면 매핑하지 않는다 (예: "서버" + GB)
-METRIC_UNITS = {
-    "user_count": ["명", "users", "user", "people"],
-    "search_api_p95_ms": ["ms", "밀리초", "millisecond", "milliseconds"],
-    "server_count": ["대", "개", "servers", "server", "units"],
-}
+METRIC_UNITS = _registry.units_by_metric(KNOWN_METRICS)
 
 # Decision Extraction: llama-swap의 OpenAI 호환 API (설정은 변경하지 않고 호출만)
 LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "http://localhost:8080/v1").rstrip("/")

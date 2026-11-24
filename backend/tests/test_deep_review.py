@@ -19,12 +19,22 @@ import db  # noqa: E402
 import deep_review_worker as worker  # noqa: E402
 from services import deep_review, review_memo  # noqa: E402
 from services import deep_review_contract as contract  # noqa: E402
+from schemas import Decision  # noqa: E402
+from services import telegram_notifier  # noqa: E402
 from services.paperclip_client import PaperclipUnavailable  # noqa: E402
 
 PID = 1
 DUE = "DEC-2026-0314-DB"
 DUE2 = "DEC-2026-0321-CACHE"
-ACTIVE = "DEC-ADR-001-STORAGE"
+ACTIVE = "DEC-ADR-001-STORAGE"  # CONNECTED (server_count) + ACTIVE
+NEEDS_MAPPING = "DEC-T-DEPLOY"  # 프로덕션 배포 횟수 > 5 / 7일 (deployment_count: data source 없음)
+MANUAL_TRIGGER = "DEC-T-COMPLAINTS"  # "고객 불만이 많아지면 다시 검토"
+SUPERSEDED = "DEC-T-OLD"
+DEPLOY_TRIGGER = {
+    "type": "metric", "raw_metric": "프로덕션 배포 횟수", "metric_key": None, "operator": ">", "threshold": 5, "unit": "회",
+    "needs_mapping": True, "raw_condition": "프로덕션 배포가 일주일에 5회를 넘으면 자동 배포를 다시 검토", "metric": None,
+    "description": "프로덕션 배포가 일주일에 5회를 넘으면 자동 배포를 다시 검토", "note": None,
+}
 PROTECTED_TABLES = ("decisions", "decision_sources", "decision_review_state", "review_events", "candidates", "sources",
                     "decision_review_memos")
 AGENTS = {"researcher": "agent-r", "analyst": "agent-a", "critic": "agent-c"}
@@ -116,7 +126,7 @@ class FakePaperclip:
 
 def findings_for(inp):
     ids = [e["id"] for e in inp["evidence_items"]][:2]
-    return {"decision_id": inp["decision_id"], "confirmed_review_due": True,
+    return {"decision_id": inp["decision_id"], "confirmed_review_due": contract.is_triggered(inp),
             "evidence": [{"ref": i, "relevance": "재검토 조건과 같은 회의 발언"} for i in ids],
             "related_decisions": [{"decision_id": DUE2, "ref": "decisions/dec-2026-0321-cache", "relation": "indirect",
                                    "summary": "규모가 커지면 다시 보는 결정"}],
@@ -129,13 +139,18 @@ def research_for(inp):
 
 def analysis_for(inp, statement="user_count가 threshold를 넘은 상태가 관측됨"):
     research = inp["research"]
-    ref = research["evidence"][0]["ref"]
+    ev = research["evidence"]
+    observed = contract.current_value_available(research["observed_state"])
+    state_ref = "FACT:observed" if observed else "FACT:mapping_status"  # 현재 관측값이 없으면 관측값을 근거로 쓰지 않는다
+    if not observed:
+        statement = "현재 관측값이 없어 조건 충족 여부를 확인할 수 없음"
+    ref = ev[0]["ref"] if ev else "FACT:rationale"
     return {"decision_id": research["decision_id"],
-            "known_changes": [{"statement": statement, "evidence_refs": ["FACT:observed", "FACT:raw_condition"]}],
-            "implications": [{"statement": "현재 DB 선택의 전제를 다시 확인할 필요가 있을 수 있음", "evidence_refs": [ref],
+            "known_changes": [{"statement": statement, "evidence_refs": [state_ref, "FACT:raw_condition"]}],
+            "implications": [{"statement": "현재 선택의 전제를 다시 확인할 필요가 있을 수 있음", "evidence_refs": [ref],
                               "confidence": "medium"}],
             "unknowns": ["실제 부하"], "recommended_checks": [{"check": "쓰기 부하 확인", "reason": "관측값 없음"}],
-            "evidence_refs": ["FACT:observed", ref]}
+            "evidence_refs": [state_ref, ref]}
 
 
 def critique(inp, verdict="PASS"):
@@ -160,7 +175,15 @@ class DeepReviewBase(unittest.TestCase):
         db.record_review_check(PID, DUE2, "ACTIVE", "ACTIVE", _obs("search_api_p95_ms", 700), None, None)
         db.record_review_check(PID, DUE2, "REVIEW_DUE", "REVIEW_DUE", _obs("search_api_p95_ms", 850), None,
                                {"previous_status": "ACTIVE", "new_status": "REVIEW_DUE", "trigger": {"type": "metric"}})
-        db.record_review_check(PID, ACTIVE, "ACTIVE", "ACTIVE", None, None, None)
+        db.record_review_check(PID, ACTIVE, "ACTIVE", "ACTIVE", _obs("server_count", 1), None, None)
+        with db.connect() as conn:  # NEEDS_MAPPING / MANUAL 결정은 monitor 대상이 아니라 review state가 없다
+            for did, trig, status in ((NEEDS_MAPPING, DEPLOY_TRIGGER, "active"),
+                                      (MANUAL_TRIGGER, {"type": "manual", "description": "고객 불만이 많아지면 다시 검토"}, "active"),
+                                      (SUPERSEDED, {"type": "manual", "description": "x"}, "superseded")):
+                db.insert_decision(conn, Decision(
+                    id=did, project_id=PID, topic="t", title=did, decision="d", rationale="r", assumptions=["a"],
+                    review_trigger=trig, status=status, origin="review_approved", human_verified=True, evidence=[],
+                    created_at="2026-11-25", updated_at="2026-11-25", history=[]))
         org = tmp / "org.json"
         org.write_text(json.dumps({"company_id": "co-1", "project_id": "pr-1", "goal_id": "go-1", "agents": AGENTS}))
         deep_review.DEEP_REVIEW_ORG_FILE = org
@@ -286,13 +309,14 @@ class FlowTest(DeepReviewBase):
         self.assertEqual(inp["role"], "researcher")
         self.assertEqual(inp["authoritative_facts"], run["input_snapshot"]["authoritative_facts"])
 
-    def test_non_review_due_rejected(self):
-        with self.assertRaises(deep_review.DeepReviewError) as ctx:
-            deep_review.start(ACTIVE)
-        self.assertEqual((ctx.exception.status, ctx.exception.code), (409, "not_review_due"))
+    def test_invalid_decision_rejected(self):
         with self.assertRaises(deep_review.DeepReviewError) as ctx:
             deep_review.start("DEC-NOPE")
         self.assertEqual(ctx.exception.status, 404)
+        with self.assertRaises(deep_review.DeepReviewError) as ctx:  # 대체(superseded)된 결정은 유효하지 않음
+            deep_review.start(SUPERSEDED)
+        self.assertEqual((ctx.exception.status, ctx.exception.code), (409, "decision_not_active"))
+        self.assertEqual(db.list_deep_review_runs(SUPERSEDED), [])
 
     def test_duplicate_running_prevented(self):
         run = deep_review.start(DUE)
@@ -425,6 +449,144 @@ class FailureIsolationTest(DeepReviewBase):
         self.assertEqual(review_memo.review_context(DUE)[0]["decision_id"], DUE)  # Review Memo 대상 확인 그대로
 
 
+class EntryConditionTest(DeepReviewBase):
+    """REVIEW_DUE가 아니어도 Deep Review를 실행할 수 있다. 실행 ≠ REVIEW_DUE 전환."""
+
+    def setUp(self):
+        super().setUp()
+        self.sent = []
+        self._orig_tg = telegram_notifier.send_review_due_notification
+
+        async def record(*a, **k):
+            self.sent.append(a)
+        telegram_notifier.send_review_due_notification = record
+
+    def tearDown(self):
+        telegram_notifier.send_review_due_notification = self._orig_tg
+
+    def _snap(self, decision_id):
+        return deep_review.snapshot_for(decision_id)[2]
+
+    def _assert_unchanged(self, before, decision_ids):
+        self.assertEqual(_protected_dump(), before)  # decisions / review state / review events / candidates …
+        self.assertEqual(self.sent, [])  # Telegram Review Due 알림 없음
+        due = {i["decision_id"] for i in review_memo.decision_read.list_review_due(PID)["items"]}
+        for did in decision_ids:
+            if did != DUE:
+                self.assertNotIn(did, due)  # ACTIVE → REVIEW_DUE로 바뀌지 않음
+
+    def test_review_due_is_triggered(self):
+        run = deep_review.start(DUE)
+        self.assertEqual(run["review_reason"], "TRIGGERED")
+        snap = run["input_snapshot"]
+        self.assertEqual((snap["review_reason"], snap["review_state"], snap["mapping_status"]),
+                         ("TRIGGERED", "REVIEW_DUE", "CONNECTED"))
+        self.assertIs(snap["authoritative_facts"]["trigger_condition_met"], True)
+        self.assertEqual(snap["required_unknowns"], [])
+
+    def test_active_manual_review(self):
+        before = _protected_dump()
+        run = deep_review.start(ACTIVE)
+        self.assertEqual(run["review_reason"], "MANUAL")
+        snap = run["input_snapshot"]
+        self.assertEqual((snap["review_state"], snap["mapping_status"]), ("ACTIVE", "CONNECTED"))
+        facts = snap["authoritative_facts"]
+        self.assertIs(facts["trigger_condition_met"], False)  # 마지막 확인에서 미충족 (실행했다고 충족이 아님)
+        self.assertIn("수동", facts["review_reason_note"])
+        self.assertTrue(snap["observed_state"]["current_value"]["available"])
+        self.assertIsNone(run["review_event_id"])
+        run = deep_review.kickoff(run["id"], self.pc)
+        parent = self.pc.issues[run["paperclip"]["parent_issue_id"]]
+        self.assertIn("Manual review", parent["description"])
+        self.assertNotIn("REVIEW_DUE 결정", parent["description"])
+        db.update_deep_review_run(run["id"], status="FAILED")  # 다음 단계는 아래 run_to_end로
+        self.pc = FakePaperclip()
+        done = self.run_to_end(ACTIVE)
+        self.assertEqual((done["status"], done["review_reason"]), ("COMPLETED", "MANUAL"))
+        self.assertEqual(db.get_decision(ACTIVE).status, "active")
+        self._assert_unchanged(before, [ACTIVE])
+
+    def test_needs_mapping_review(self):
+        before = _protected_dump()
+        snap = self._snap(NEEDS_MAPPING)
+        self.assertEqual((snap["review_reason"], snap["review_state"], snap["mapping_status"]),
+                         ("MANUAL", "ACTIVE", "NEEDS_MAPPING"))
+        current = snap["observed_state"]["current_value"]
+        self.assertEqual(current, {"available": False, "reason": "metric_not_mapped", "metric": "deployment_count"})
+        self.assertIsNone(snap["observed_state"]["observed"])  # 관측값을 만들지 않는다
+        self.assertIsNone(snap["authoritative_facts"]["trigger_condition_met"])
+        [unknown] = snap["required_unknowns"]
+        self.assertIn("metric not mapped", unknown)
+        self.assertIn("deployment_count", unknown)
+
+        research = contract.assemble_research(findings_for(snap), snap)
+        self.assertEqual(research["unknowns"][0], unknown)  # Researcher 결과에 결정적으로 포함
+        dropped = json.loads(json.dumps(research)); dropped["unknowns"] = ["다른 것"]
+        with self.assertRaisesRegex(contract.ContractError, "unknowns"):
+            contract.validate_research(dropped, snap)
+        # 관측값이 없으면 FACT:observed를 근거로 쓸 수 없다 (현재 metric 값을 만든 것으로 봄)
+        claims_value = analysis_for({"research": research})
+        claims_value["known_changes"][0]["evidence_refs"] = ["FACT:observed"]
+        with self.assertRaisesRegex(contract.ContractError, "invalid evidence reference"):
+            contract.validate_analysis(claims_value, research)
+        # 충족 여부가 null(알 수 없음)이어도 그 사실 자체는 인용할 수 있다
+        unknown_met = analysis_for({"research": research})
+        unknown_met["implications"][0]["evidence_refs"] = ["FACT:trigger_condition_met"]
+        contract.validate_analysis(unknown_met, research)
+        no_checks = analysis_for({"research": research}) | {"recommended_checks": []}
+        with self.assertRaisesRegex(contract.ContractError, "recommended_checks"):
+            contract.validate_analysis(no_checks, research)
+
+        run = self.run_to_end(NEEDS_MAPPING)  # 현재 상태가 없어도 실패가 아니다
+        self.assertEqual((run["status"], run["review_reason"]), ("COMPLETED", "MANUAL"))
+        stored = next(a for a in db.list_deep_review_artifacts(run["id"]) if a["role"] == "researcher")["payload"]
+        self.assertIn(unknown, stored["unknowns"])
+        self._assert_unchanged(before, [NEEDS_MAPPING])
+
+    def test_manual_trigger_review(self):
+        before = _protected_dump()
+        snap = self._snap(MANUAL_TRIGGER)
+        self.assertEqual((snap["review_reason"], snap["review_state"], snap["mapping_status"]), ("MANUAL", "ACTIVE", "MANUAL"))
+        self.assertIsNone(snap["authoritative_facts"]["trigger_condition_met"])  # 충족 여부는 사람이 판단
+        self.assertEqual(snap["observed_state"]["current_value"]["reason"], "manual_trigger")
+        self.assertIn("manual trigger", snap["required_unknowns"][0])
+        # Researcher가 trigger 충족(REVIEW_DUE)을 주장하면 거부
+        with self.assertRaisesRegex(contract.ContractError, "manual Deep Review"):
+            contract.assemble_research(findings_for(snap) | {"confirmed_review_due": True}, snap)
+        run = self.run_to_end(MANUAL_TRIGGER)
+        self.assertEqual((run["status"], run["review_reason"]), ("COMPLETED", "MANUAL"))
+        # ticket 입력에 실행 사유가 들어간다
+        research_issue = next(i for i in self.pc.issues.values() if i.get("assigneeAgentId") == AGENTS["researcher"])
+        inp = contract.parse_input(research_issue["description"])
+        self.assertEqual((inp["review_reason"], inp["mapping_status"]), ("MANUAL", "MANUAL"))
+        self._assert_unchanged(before, [MANUAL_TRIGGER])
+
+    def test_duplicate_manual_run_rejected(self):
+        run = deep_review.start(MANUAL_TRIGGER)
+        with self.assertRaises(deep_review.DeepReviewError) as ctx:
+            deep_review.start(MANUAL_TRIGGER)
+        self.assertEqual((ctx.exception.status, ctx.exception.code, ctx.exception.extra["run_id"]),
+                         (409, "deep_review_running", run["id"]))
+
+    def test_prompts_separate_execution_from_trigger(self):
+        self.assertIn("trigger가 충족되었다는 증거가 아니다", worker.instructions("researcher"))
+        self.assertIn("Deep Review 실행 ≠ trigger 충족", worker.instructions("analyst"))
+        critic = worker.instructions("critic")
+        self.assertIn("review_reason = MANUAL", critic)
+        self.assertIn("NEEDS_MAPPING", critic)
+        prompt = worker.research_prompt({**self._snap(NEEDS_MAPPING), "role": "researcher", "iteration": 0})
+        self.assertIn('"review_reason": "MANUAL"', prompt)
+        self.assertIn('"required_unknowns"', prompt)
+
+    def test_old_runs_default_to_triggered(self):
+        """v8 이전 run (review_reason 없음) = REVIEW_DUE에서만 시작됐다 → TRIGGERED"""
+        run_id = db.create_deep_review_run(PID, DUE, None, None, {"decision_id": DUE})
+        self.assertEqual(db.get_deep_review_run(run_id["id"])["review_reason"], "TRIGGERED")
+        with self.assertRaises(sqlite3.IntegrityError):
+            with db.connect() as conn:
+                conn.execute("UPDATE deep_review_runs SET review_reason = 'AUTO' WHERE id = ?", (run_id["id"],))
+
+
 class ApiTest(DeepReviewBase):
     def test_api_start_list_get_and_disabled(self):
         from fastapi.testclient import TestClient
@@ -440,7 +602,10 @@ class ApiTest(DeepReviewBase):
             run = res.json()
             self.assertEqual(run["status"], "PENDING")
             self.assertEqual(client.post(f"/api/decisions/{DUE}/deep-review").status_code, 409)
-            self.assertEqual(client.post(f"/api/decisions/{ACTIVE}/deep-review").json()["detail"]["code"], "not_review_due")
+            self.assertEqual(run["review_reason"], "TRIGGERED")
+            manual = client.post(f"/api/decisions/{ACTIVE}/deep-review")  # REVIEW_DUE가 아니어도 시작 (409 아님)
+            self.assertEqual(manual.status_code, 202, manual.text)
+            self.assertEqual(manual.json()["review_reason"], "MANUAL")
             self.assertEqual(client.get(f"/api/deep-reviews/{run['id']}").json()["id"], run["id"])
             self.assertEqual(len(client.get(f"/api/decisions/{DUE}/deep-reviews").json()), 1)
             self.assertEqual(client.get("/api/deep-reviews/9999").status_code, 404)
@@ -476,6 +641,11 @@ class WorkerTest(DeepReviewBase):
             self.assertIn("Decision Analyst", seen[0]["messages"][0]["content"])  # 역할 instruction 파일
             user = seen[0]["messages"][1]["content"]
             self.assertIn('"research"', user)
+            self.assertIn("사용 가능한 reference", user)  # 검증과 같은 reference 목록을 준다
+            self.assertIn("FACT:observed", user)
+            snap = deep_review.snapshot_for(NEEDS_MAPPING)[2]  # 관측값이 없으면 FACT:observed는 목록에 없다
+            nm = worker.llm_messages("analyst", {"research": contract.assemble_research(findings_for(snap), snap)})
+            self.assertNotIn("FACT:observed", nm[1]["content"].split("사용 가능한 reference")[1])
             self.assertEqual(out["decision_id"], DUE)
             self.assertEqual(meta["cost_usd"], 0.0012)
             with self.assertRaises(contract.ContractError):  # JSON이 아닌 응답 → 실패 (저장 안 됨)

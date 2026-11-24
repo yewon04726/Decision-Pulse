@@ -104,9 +104,14 @@ def _model(model, payload: dict):
 # ---------------------------------------------------------------- snapshot (backend가 DB 기록 그대로 만든다)
 
 
-def build_snapshot(item: dict, detail: dict, evidence_items: list[dict], detection_text: str, trigger_text: str) -> dict:
-    """Authoritative Facts (Review Memo v4와 같은 read service 값). LLM이 만들지 않는다."""
+def build_snapshot(item: dict, detail: dict, evidence_items: list[dict], detection_text: str, trigger_text: str,
+                   context: dict | None = None) -> dict:
+    """Authoritative Facts (Review Memo v4와 같은 read service 값). LLM이 만들지 않는다.
+    context(실행 사유 / 실행 시점 상태 / mapping 상태)도 backend가 정한 사실로 고정한다.
+    Deep Review 실행 자체는 trigger 충족의 근거가 아니다: review_reason=MANUAL이면 trigger_condition_met은 False/None."""
     trigger = item.get("trigger") or {}
+    ctx = context or {"review_reason": "TRIGGERED", "review_state": "REVIEW_DUE", "mapping_status": "CONNECTED",
+                      "current_value": {"available": True}, "required_unknowns": []}
     facts = {
         "decision_id": detail.get("decision_id"),
         "title": detail.get("title"),
@@ -122,22 +127,50 @@ def build_snapshot(item: dict, detail: dict, evidence_items: list[dict], detecti
         "review_state": detail.get("review_state"),
         "status": detail.get("status"),
         "human_verified": detail.get("human_verified"),
+        "review_reason": ctx.get("review_reason"),
+        "review_reason_note": ctx.get("review_reason_note"),
+        "current_review_state": ctx.get("review_state"),
+        "trigger_condition_met": ctx.get("trigger_condition_met"),
+        "mapping_status": ctx.get("mapping_status"),
+        "mapping_reason": ctx.get("mapping_reason"),
+        "canonical_metric": ctx.get("canonical_metric"),
     }
     observed = {k: item.get(k) for k in ("review_status", "observed", "last_check_status", "last_checked_at",
                                          "detected_at", "event")}
-    return {"decision_id": facts["decision_id"], "authoritative_facts": facts, "observed_state": observed,
-            "evidence_items": evidence_items}
+    observed["current_value"] = ctx.get("current_value")
+    return {"decision_id": facts["decision_id"], "review_reason": ctx.get("review_reason"),
+            "review_state": ctx.get("review_state"), "mapping_status": ctx.get("mapping_status"),
+            "authoritative_facts": facts, "observed_state": observed,
+            "required_unknowns": list(ctx.get("required_unknowns") or []), "evidence_items": evidence_items}
 
 
-def fact_refs(facts: dict) -> set[str]:
+def is_triggered(snapshot_or_research: dict) -> bool:
+    """실행 사유가 TRIGGERED(REVIEW_DUE)인가. v8 이전 snapshot에는 사유가 없다 → 그때는 REVIEW_DUE에서만 실행 가능했다."""
+    facts = snapshot_or_research.get("authoritative_facts") or {}
+    return (snapshot_or_research.get("review_reason") or facts.get("review_reason") or "TRIGGERED") == "TRIGGERED"
+
+
+def current_value_available(observed_state: dict) -> bool:
+    """현재 관측값이 있는가 (없으면 FACT:observed를 근거로 쓸 수 없다). v8 이전 snapshot은 항상 있었다."""
+    current = (observed_state or {}).get("current_value")
+    return True if current is None else bool(current.get("available"))
+
+
+# 실행 맥락 사실은 값이 null이어도 인용할 수 있다 (예: trigger_condition_met = null → "충족 여부를 알 수 없다"는 사실)
+CONTEXT_FACT_KEYS = ("review_reason", "current_review_state", "trigger_condition_met", "mapping_status")
+
+
+def fact_refs(facts: dict, observed_available: bool = True) -> set[str]:
     refs = {f"FACT:{k}" for k, v in facts.items() if k != "assumptions" and v not in (None, "", [])}
+    refs |= {f"FACT:{k}" for k in CONTEXT_FACT_KEYS if k in facts}
     refs |= {f"FACT:assumptions[{i}]" for i in range(len(facts.get("assumptions") or []))}
-    refs.add("FACT:observed")
+    if observed_available:  # 현재 관측값이 없으면 (NEEDS_MAPPING / MANUAL / 읽기 실패) 관측값을 근거로 쓸 수 없다
+        refs.add("FACT:observed")
     return refs
 
 
 def known_refs(research: dict) -> set[str]:
-    refs = fact_refs(research.get("authoritative_facts") or {})
+    refs = fact_refs(research.get("authoritative_facts") or {}, current_value_available(research.get("observed_state")))
     refs |= {e["ref"] for e in research.get("evidence") or []}
     refs |= {d["decision_id"] for d in research.get("related_decisions") or []}
     return refs
@@ -151,8 +184,11 @@ def assemble_research(findings: dict, snapshot: dict) -> dict:
     f = _model(ResearchFindings, findings)
     if f.decision_id != snapshot["decision_id"]:
         raise ContractError(f"decision_id 불일치: {f.decision_id} != {snapshot['decision_id']}")
-    if not f.confirmed_review_due:
+    # confirmed_review_due = Researcher가 list_review_due로 확인한 결과. backend 실행 사유와 같아야 한다
+    if is_triggered(snapshot) and not f.confirmed_review_due:
         raise ContractError("Researcher가 대상 결정을 REVIEW_DUE로 확인하지 못함")
+    if not is_triggered(snapshot) and f.confirmed_review_due:
+        raise ContractError("manual Deep Review인데 Researcher가 대상 결정을 REVIEW_DUE(trigger 충족)로 보고함")
     by_id = {e["id"]: e for e in snapshot.get("evidence_items") or []}
     unknown = [e.ref for e in f.evidence if e.ref not in by_id]
     if unknown:
@@ -173,7 +209,8 @@ def assemble_research(findings: dict, snapshot: dict) -> dict:
         "observed_state": snapshot["observed_state"],
         "evidence": evidence,
         "related_decisions": related,
-        "unknowns": list(f.unknowns),
+        # 현재 상태가 없다는 사실(metric not mapped / manual trigger …)은 backend가 결정적으로 앞에 넣는다
+        "unknowns": list(dict.fromkeys([*(snapshot.get("required_unknowns") or []), *f.unknowns])),
     }
     return validate_research(research, snapshot)
 
@@ -185,6 +222,9 @@ def validate_research(payload: dict, snapshot: dict, decision_exists=None) -> di
     # 사실 부분은 snapshot과 정확히 같아야 한다 (LLM/worker가 바꿀 수 없다)
     if r.authoritative_facts != snapshot["authoritative_facts"] or r.observed_state != snapshot["observed_state"]:
         raise ContractError("authoritative_facts / observed_state가 backend snapshot과 다름")
+    missing = [u for u in snapshot.get("required_unknowns") or [] if u not in r.unknowns]
+    if missing:
+        raise ContractError(f"현재 상태 부재가 unknowns에 없음: {missing[0]}")
     by_id = {e["id"]: e for e in snapshot.get("evidence_items") or []}
     for e in r.evidence:
         src = by_id.get(e.ref)
@@ -216,6 +256,9 @@ def validate_analysis(payload: dict, research: dict) -> dict:
     _check_refs(a.evidence_refs, known, "evidence_refs")
     if not a.known_changes and not a.implications:
         raise ContractError("known_changes와 implications가 모두 비어 있음")
+    if not current_value_available(research.get("observed_state")) and not (a.unknowns and a.recommended_checks):
+        # 현재 상태가 없으면 실패가 아니라 unknown + 사람이 확인할 항목으로 넘긴다 (추측 금지)
+        raise ContractError("현재 관측값이 없는데 unknowns / recommended_checks가 비어 있음")
     return a.model_dump()
 
 

@@ -1,4 +1,4 @@
-import type { MetricName, MetricTrigger, ReviewTrigger } from "./types";
+import type { DecisionView, DisplayStatus, MappingStatus, MetricName, MetricTrigger, ReviewTrigger } from "./types";
 
 export const METRIC_LABELS: Record<MetricName, string> = {
   user_count: "User Count",
@@ -29,11 +29,18 @@ export function formatTrigger(t: MetricTrigger) {
   return `${metricLabel(t)} ${t.operator} ${formatNumber(t.threshold)}`;
 }
 
+const WINDOW_LABELS: Record<string, string> = { "1d": "1일", "7d": "7일", "30d": "30일" };
+
+/** 집계 기간 표시: " / 7일" (없으면 빈 문자열) */
+export function formatWindow(window: string | null | undefined) {
+  return window ? ` / ${WINDOW_LABELS[window] ?? window}` : "";
+}
+
 /** 코드 표기 그대로: user_count > 1000 / 매핑 안 된 지표는 원문 표현 + 단위 (null로 표시하지 않음) */
 export function formatTriggerRaw(t: MetricTrigger) {
   const key = metricKey(t);
-  if (key) return `${key} ${t.operator} ${t.threshold}`;
-  return `${t.raw_metric ?? "미확인 지표"} ${t.operator} ${t.threshold}${t.unit ? ` ${t.unit}` : ""}`;
+  if (key) return `${key} ${t.operator} ${t.threshold}${formatWindow(t.window)}`;
+  return `${t.raw_metric ?? "미확인 지표"} ${t.operator} ${t.threshold}${t.unit ? ` ${t.unit}` : ""}${formatWindow(t.window)}`;
 }
 
 const DURATION_UNITS = { minute: "분", hour: "시간", day: "일", week: "주", month: "개월" } as const;
@@ -63,10 +70,21 @@ function formatNode(t: ReviewTrigger, nested: boolean): string {
   }
 }
 
-/** 재검토 조건 한 줄 표시 (backend format_review_trigger_v2와 같은 규칙 + 매핑 필요 표시)
- *  예) server_count >= 2 / search_api_p95_ms > 800 AND 3일 연속 / 일주일 프로덕션 배포 횟수 > 5 · 지표 매핑 필요 */
+/** 재검토 조건 한 줄 표시 (backend format_review_trigger_v2와 같은 규칙)
+ *  예) server_count >= 2 / search_api_p95_ms > 800 AND 3일 연속 / 프로덕션 배포 횟수 > 5 회 / 7일
+ *  자동화 상태(데이터 연결 필요 / 수동 확인)는 문장에 섞지 않고 TriggerStatus로 따로 표시한다 */
 export function formatReviewTrigger(t: ReviewTrigger | null): string {
   if (!t) return "없음";
-  const text = formatNode(t, false);
-  return needsMapping(t) ? `${text} · 지표 매핑 필요` : text;
+  return formatNode(t, false);
+}
+
+/** 목록/집계용 분류: lifecycle(PENDING_REVIEW, SUPERSEDED) → 자동화 상태(NEEDS_MAPPING, MANUAL) → review state(ACTIVE/REVIEW_DUE/UNKNOWN) */
+export type ReviewBucket = DisplayStatus | Exclude<MappingStatus, "CONNECTED">;
+
+export function reviewBucket(d: Pick<DecisionView, "display_status" | "trigger_status">): ReviewBucket {
+  const s = d.display_status;
+  if (s === "SUPERSEDED" || s === "PENDING_REVIEW") return s;
+  const m = d.trigger_status?.mapping_status;
+  if (m === "NEEDS_MAPPING" || m === "MANUAL") return m;
+  return s;
 }

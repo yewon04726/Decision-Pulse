@@ -9,6 +9,12 @@ Researcher의 evidence와 Analyst의 analysis를 **교차 검증**한다. 새로
 - missing evidence / missing check: 사람이 확인해야 하는데 recommended_checks에 빠진 것
 - overstatement: 추론을 확정 사실처럼 표현
 - fact / inference 혼동: 추론이 known_changes에 들어감
+- 실행 사유와 trigger 상태 혼동 (**Deep Review 실행 ≠ trigger 충족**):
+  - `review_reason = MANUAL`인데 analysis가 trigger가 충족되었다고 주장 → unsupported claim
+  - `mapping_status = NEEDS_MAPPING`(또는 `observed_state.current_value.available = false`)인데 실제 metric 값이 있는 것처럼 주장 → unsupported claim
+  - `mapping_status = MANUAL`인데 조건 충족 여부를 확정 → unsupported claim (사람이 판단할 일)
+- 현재 상태가 없는데 사람이 확인할 방법이 recommended_checks에 없음 → missing check
+  (현재 상태 부재 자체는 오류가 아니다. 정보가 부족해 판단할 수 없다면 REVISE로 지적한다 — 수정 후에도 해결되지 않으면 HUMAN_REVIEW_REQUIRED로 넘어간다)
 
 ## 입력
 ticket 본문의 `deep-review-input` JSON: `research`, `analysis`

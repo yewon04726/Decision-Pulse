@@ -21,9 +21,10 @@ from datetime import datetime
 import db
 from config import REVIEW_MONITOR_ENABLED, REVIEW_MONITOR_INTERVAL_SECONDS
 from schemas import Decision, MetricTrigger
-from services import metrics as metric_service
 from services import telegram_notifier
+from services.metric_adapters import resolve_metrics
 from services.review import to_view, trigger_metric_names
+from services.trigger_status import classify
 from services.review_trigger import format_review_trigger_v2
 
 log = logging.getLogger("review_monitor")
@@ -47,11 +48,19 @@ _DEFINITIVE = ("ACTIVE", "REVIEW_DUE")
 
 
 def _monitored(decisions: list[Decision]) -> list[Decision]:
-    """자동 판정 대상: 업무 상태가 active이고, 등록된 지표의 metric 조건이 있는 결정"""
-    return [
-        d for d in decisions
-        if d.status == "active" and isinstance(d.review_trigger, MetricTrigger) and d.review_trigger.metric_key
-    ]
+    """자동 판정 대상: 업무 상태가 active이고 재검토 조건이 CONNECTED인 결정 (resolver가 연결된 단일 metric 조건).
+    NEEDS_MAPPING(data source 미연결) / MANUAL(사람 확인 조건)은 평가하지 않는다 → REVIEW_DUE 이벤트도 만들지 않는다."""
+    out = []
+    for d in decisions:
+        try:
+            status = classify(d.review_trigger)
+        except Exception as e:  # noqa: BLE001 — 한 결정의 조건 해석 오류가 다른 결정 monitoring을 막지 않게
+            log.warning("%s 재검토 조건 분류 실패 (건너뜀): %s", d.id, e)
+            continue
+        if (d.status == "active" and status is not None and status.mapping_status == "CONNECTED"
+                and isinstance(d.review_trigger, MetricTrigger) and d.review_trigger.metric_key):
+            out.append(d)
+    return out
 
 
 async def check_project(project) -> list[int]:
@@ -59,7 +68,7 @@ async def check_project(project) -> list[int]:
     decisions = _monitored(db.list_decisions(project.id))
     if not decisions:
         return []
-    found, errors = await metric_service.check_metrics(project, trigger_metric_names(decisions))
+    found, errors = await resolve_metrics(project, trigger_metric_names(decisions))
     states = db.get_review_states(project.id)
     created = []
     for decision in decisions:

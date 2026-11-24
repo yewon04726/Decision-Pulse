@@ -1,4 +1,4 @@
-"""Deep Review: REVIEW_DUE 결정을 Paperclip 조직(Researcher → Analyst → Critic)이 검토한다 (advisory).
+"""Deep Review: Decision을 Paperclip 조직(Researcher → Analyst → Critic)이 검토한다 (advisory).
 
 기존 Review Memo(single agent, Hermes)와 별개 기능이며 대체하지 않는다.
 
@@ -11,7 +11,9 @@
   Decision / decision_review_state / review_events / candidates / review memo는 바꾸지 않는다.
 
 흐름
-  POST → (REVIEW_DUE 확인, 진행 중 run 없음) → run PENDING + snapshot
+  POST → (유효한 active Decision, 진행 중 run 없음) → run PENDING + snapshot
+       review_reason: 시작 시점에 REVIEW_DUE면 TRIGGERED, 아니면 MANUAL (사용자 수동 실행).
+       Deep Review 실행 ≠ REVIEW_DUE 전환: review state / review event / Telegram / trigger 평가는 건드리지 않는다.
        → Paperclip parent ticket "Deep Review: <id>" + research ticket(Researcher) → RESEARCHING
   monitor(run_forever, 3초) → ticket done → output comment 검증 → artifact 저장 → 다음 ticket
        research → analysis(ANALYZING) → critique(CRITIQUING)
@@ -41,9 +43,10 @@ from config import (
     PAPERCLIP_UI_URL,
 )
 from services import deep_review_contract as contract
-from services import review_memo
+from services import decision_read, review_memo
 from services.paperclip_client import PaperclipClient, PaperclipError, PaperclipUnavailable
 from services.review_trigger import format_review_trigger_v2
+from services.trigger_status import classify
 
 log = logging.getLogger("deep_review")
 if not log.handlers:
@@ -100,21 +103,106 @@ def load_org(path: Path | None = None) -> dict:
 # ---------------------------------------------------------------- 시작
 
 
+# 실행 사유 (Deep Review 실행 ≠ trigger 충족). backend가 시작 시점 상태로 정한다
+REASON_NOTES = {
+    "TRIGGERED": "Review Monitor가 자동 재검토 조건 충족(REVIEW_DUE)을 감지한 Decision이다.",
+    "MANUAL": "사용자가 수동으로 Deep Review를 요청했으며, 현재 자동 재검토 조건이 충족된 상태(REVIEW_DUE)가 아니다. "
+              "Deep Review 실행은 trigger 충족의 근거가 아니다.",
+}
+MANUAL_DETECTION = "자동 재검토 조건 충족이 감지되지 않은 상태에서 사람이 수동으로 실행함 (REVIEW_DUE 전환 없음)."
+
+
+def _mapping(decision, project) -> dict:
+    """Review Trigger mapping 상태 (decision 목록/상세의 trigger_status와 같은 규칙: classify + 프로젝트 metric source)"""
+    status = classify(decision.review_trigger)
+    if status is None:
+        return {"mapping_status": "MANUAL", "canonical_metric": None, "reason": "저장된 재검토 조건이 없습니다."}
+    out = {"mapping_status": status.mapping_status, "canonical_metric": status.canonical_metric, "reason": status.reason}
+    if status.mapping_status == "CONNECTED" and (project is None or not project.metric_source):
+        out.update(mapping_status="NEEDS_MAPPING", reason="이 프로젝트에는 데이터 소스(metric source)가 연결되지 않았습니다.")
+    return out
+
+
+def _current_value(mapping: dict, state: dict, observed) -> dict:
+    """현재 관측값을 쓸 수 있는지. 없으면 이유를 남긴다 (agent가 값을 만들지 않게)."""
+    metric = mapping.get("canonical_metric")
+    if mapping["mapping_status"] == "NEEDS_MAPPING":
+        return {"available": False, "reason": "metric_not_mapped", "metric": metric}
+    if mapping["mapping_status"] == "MANUAL":
+        return {"available": False, "reason": "manual_trigger", "metric": None}
+    if not observed:
+        return {"available": False, "reason": "not_observed" if not state else "read_failed", "metric": metric}
+    return {"available": True, "reason": None, "metric": metric}
+
+
+def _required_unknowns(mapping: dict, current: dict) -> list[str]:
+    """현재 상태가 없을 때 Researcher 결과에 반드시 남는 unknown (backend가 결정적으로 만든다)"""
+    if current["available"]:
+        return []
+    reason = current["reason"]
+    if reason == "metric_not_mapped":
+        name = current.get("metric") or "이 조건의 지표"
+        return [f"현재 관측값 없음 (metric not mapped): {name}는 Decision Pulse에 연결된 데이터 소스가 없어 현재 값을 확인할 수 없다."]
+    if reason == "manual_trigger":
+        return ["현재 상태 판단 불가 (manual trigger): 재검토 조건이 자동 측정 지표가 아니어서 충족 여부는 사람이 판단해야 한다."]
+    if reason == "read_failed":
+        return [f"현재 관측값 없음 (read failed): {current.get('metric')} 값을 마지막 확인에서 읽지 못했다."]
+    return [f"현재 관측값 없음 (not observed): {current.get('metric')} 값이 아직 기록되지 않았다."]
+
+
+def review_context(decision_id: str) -> tuple[dict, dict, dict]:
+    """(상태 항목, detail, context). Review Memo와 같은 read service(decision_read)로 현재 상태를 본다.
+    REVIEW_DUE가 아니어도 막지 않는다 → review_reason = MANUAL. 상태(review state / event / trigger)는 읽기만 한다."""
+    decision = db.get_decision(decision_id)
+    if decision is None:
+        raise DeepReviewError(404, "decision_not_found", f"Decision not found: {decision_id}")
+    if decision.status != "active":
+        raise DeepReviewError(409, "decision_not_active",
+                              f"현재 유효한 Decision이 아니어서 Deep Review를 시작하지 않습니다 (status: {decision.status}).",
+                              decision_status=decision.status)
+    detail = decision_read.get_decision_detail(decision_id)
+    due = decision_read.list_review_due(decision.project_id)
+    item = next((i for i in due.get("items", []) if i["decision_id"] == decision_id), None)
+    state = detail.get("review_state") or {}
+    mapping = _mapping(decision, db.get_project(decision.project_id))
+    if item is not None:
+        reason, review_state = "TRIGGERED", "REVIEW_DUE"
+    else:
+        reason = "MANUAL"
+        item = {"decision_id": decision_id, "trigger": detail.get("review_trigger"),
+                "review_status": state.get("last_review_status"), "observed": state.get("last_observed"),
+                "last_check_status": state.get("last_check_status"), "last_checked_at": state.get("last_checked_at"),
+                "detected_at": None, "detected_by": None, "event": None}
+        if mapping["mapping_status"] != "CONNECTED":
+            review_state = "ACTIVE"  # 자동 평가 대상이 아님 → lifecycle 그대로 (UNKNOWN 아님)
+        elif not state or state.get("last_check_status") == "UNKNOWN":
+            review_state = "UNKNOWN"  # 연결됐지만 현재값을 읽지 못함
+        else:
+            review_state = "ACTIVE"
+    current = _current_value(mapping, state, item.get("observed"))
+    # TRIGGERED → 충족(사실). CONNECTED + ACTIVE → 마지막 확인에서 미충족. 그 외 → 알 수 없음(None, 추측 금지)
+    met = True if reason == "TRIGGERED" else (False if review_state == "ACTIVE" and mapping["mapping_status"] == "CONNECTED"
+                                              and current["available"] else None)
+    context = {"review_reason": reason, "review_reason_note": REASON_NOTES[reason], "review_state": review_state,
+               "mapping_status": mapping["mapping_status"], "mapping_reason": mapping["reason"],
+               "canonical_metric": mapping["canonical_metric"], "trigger_condition_met": met,
+               "current_value": current, "required_unknowns": _required_unknowns(mapping, current)}
+    return item, detail, context
+
+
 def snapshot_for(decision_id: str) -> tuple[dict, dict, dict]:
-    """(list_review_due 항목, detail, snapshot). Review Memo와 같은 read service를 쓴다. REVIEW_DUE가 아니면 409."""
-    try:
-        item, detail = review_memo.review_context(decision_id)
-    except review_memo.ReviewMemoError as e:
-        raise DeepReviewError(e.status, e.code, str(e) if e.code != "not_review_due"
-                              else "현재 REVIEW_DUE인 결정이 아니어서 Deep Review를 시작하지 않습니다.", **e.extra) from e
+    """(상태 항목, detail, snapshot). 실행 사유 / 실행 시점 상태 / mapping 상태를 snapshot에 고정한다."""
+    item, detail, context = review_context(decision_id)
     items = review_memo.evidence_items(decision_id, detail.get("sources", []))
-    detection = review_memo.DETECTION_TEXT_V4.get(item.get("detected_by"), str(item.get("detected_by")))
-    snap = contract.build_snapshot(item, detail, items, detection, format_review_trigger_v2(item.get("trigger")))
+    detection = (review_memo.DETECTION_TEXT_V4.get(item.get("detected_by"), str(item.get("detected_by")))
+                 if context["review_reason"] == "TRIGGERED" else MANUAL_DETECTION)
+    snap = contract.build_snapshot(item, detail, items, detection, format_review_trigger_v2(item.get("trigger")), context)
     return item, detail, snap
 
 
 def start(decision_id: str, project_id: int | None = None) -> dict:
-    """run(PENDING) 생성. 실제 Paperclip ticket 생성은 kickoff(background)."""
+    """run(PENDING) 생성. 실제 Paperclip ticket 생성은 kickoff(background).
+    REVIEW_DUE가 아니어도 시작할 수 있다 (review_reason=MANUAL). review state / event / trigger는 바꾸지 않는다."""
     if not ENABLED:
         raise DeepReviewError(503, "deep_review_disabled", "Deep Review가 꺼져 있습니다 (DEEP_REVIEW_ENABLED=false)")
     decision = db.get_decision(decision_id)
@@ -130,7 +218,8 @@ def start(decision_id: str, project_id: int | None = None) -> dict:
     event_id = item["event"]["event_id"] if item.get("event") else None
     changed_at = (detail.get("review_state") or {}).get("last_changed_at")
     try:
-        return db.create_deep_review_run(detail["project_id"], decision_id, event_id, changed_at, snap)
+        return db.create_deep_review_run(detail["project_id"], decision_id, event_id, changed_at, snap,
+                                         review_reason=snap["review_reason"])
     except db.DeepReviewInProgress as e:
         raise DeepReviewError(409, "deep_review_running", "이 결정의 Deep Review가 이미 진행 중입니다.") from e
 
@@ -139,6 +228,7 @@ def _intro(run: dict, role: str, iteration: int) -> str:
     lines = [
         f"Decision Pulse Deep Review #{run['id']} · {run['decision_id']}",
         f"역할: {contract.ROLE_LABELS[role]}" + (f" (revision {iteration})" if iteration else ""),
+        _reason_line(run),
         "아래 deep-review-input JSON만 입력으로 사용한다. 출력은 schema 검증 후에만 다음 단계로 넘어간다.",
         "이 ticket은 Decision을 수정하지 않는다. 최종 판단은 사람이 한다.",
     ]
@@ -164,6 +254,12 @@ def _stage_ref(issue: dict, role: str, iteration: int) -> dict:
     return {"issue_id": issue["id"], "identifier": issue.get("identifier"), "role": role, "iteration": iteration}
 
 
+def _reason_line(run: dict) -> str:
+    reason = run.get("review_reason") or "TRIGGERED"
+    label = "Triggered review (REVIEW_DUE)" if reason == "TRIGGERED" else "Manual review (REVIEW_DUE 아님)"
+    return f"실행 사유: {label} — {REASON_NOTES[reason]}"
+
+
 def kickoff(run_id: int, client: PaperclipClient | None = None) -> dict | None:
     """parent ticket + research ticket 생성 → RESEARCHING. Paperclip이 없으면 FAILED (예외를 밖으로 내지 않음)."""
     run = db.get_deep_review_run(run_id)
@@ -176,7 +272,8 @@ def kickoff(run_id: int, client: PaperclipClient | None = None) -> dict | None:
         parent = pc.create_issue(org["company_id"], {
             "title": f"Deep Review: {run['decision_id']}",
             "description": (f"Decision Pulse Deep Review #{run['id']}\n\n"
-                            f"REVIEW_DUE 결정 {run['decision_id']}을 Evidence Researcher → Decision Analyst → Review Critic 순서로 검토한다.\n"
+                            f"{_reason_line(run)}\n"
+                            f"결정 {run['decision_id']}을 Evidence Researcher → Decision Analyst → Review Critic 순서로 검토한다.\n"
                             "결과는 사람의 재검토로 넘어간다. Decision은 자동으로 바뀌지 않는다."),
             "status": "todo", "priority": "medium", "projectId": org["project_id"], "goalId": org["goal_id"],
         })
@@ -444,6 +541,7 @@ def view(run: dict) -> dict:
         prefix = pc["parent_identifier"].split("-")[0]
         url = f"{PAPERCLIP_UI_URL}/{prefix}/issues/{pc['parent_identifier']}"
     return {
+        "review_reason": run.get("review_reason") or "TRIGGERED",
         **{k: run[k] for k in ("id", "project_id", "decision_id", "review_event_id", "review_state_changed_at", "status",
                                "revision_count", "final_verdict", "error", "created_at", "started_at", "completed_at")},
         "paperclip": pc,

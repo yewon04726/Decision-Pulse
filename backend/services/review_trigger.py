@@ -13,6 +13,8 @@ from typing import Any
 
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
+from metric_registry import WINDOW_LABELS
+
 from schemas import (
     CompoundTrigger,
     DateTrigger,
@@ -96,11 +98,12 @@ def _number(value: Any) -> str:
 
 def _format(t: ReviewTrigger, nested: bool) -> str:
     if isinstance(t, MetricTrigger):
+        window = f" / {WINDOW_LABELS.get(t.window, t.window)}" if t.window else ""  # 집계 기간 (예: / 7일)
         if t.metric_key:  # 등록된 지표: 키로 표시 (예: user_count > 1000)
-            return f"{t.metric_key} {t.operator} {_number(t.threshold)}"
+            return f"{t.metric_key} {t.operator} {_number(t.threshold)}{window}"
         name = t.raw_metric or "미확인 지표"
         unit = f" {t.unit}" if t.unit else ""
-        return f"{name} {t.operator} {_number(t.threshold)}{unit}"
+        return f"{name} {t.operator} {_number(t.threshold)}{unit}{window}"
     if isinstance(t, DurationTrigger):
         unit = _DURATION_UNITS.get(t.unit, t.unit)
         return f"{_number(t.value)}{unit} {'연속' if t.mode == 'consecutive' else '동안'}"

@@ -36,7 +36,7 @@ from schemas import (
     SourceAudio,
 )
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 SCHEMA_V1 = """
 CREATE TABLE projects (
@@ -293,6 +293,13 @@ def connect():
         conn.close()
 
 
+# Deep Review 실행 사유. TRIGGERED = 시작 시점에 REVIEW_DUE, MANUAL = 그 외 상태에서 사람이 수동 실행.
+# v8 이전 run은 REVIEW_DUE에서만 시작할 수 있었으므로 TRIGGERED로 채운다.
+SCHEMA_V8 = """
+ALTER TABLE deep_review_runs ADD COLUMN review_reason TEXT NOT NULL DEFAULT 'TRIGGERED'
+    CHECK (review_reason IN ('TRIGGERED', 'MANUAL'));
+"""
+
 # ---------------------------------------------------------------- init / migration
 
 
@@ -306,7 +313,7 @@ def init_db():
         version = 1
     elif version == 0:
         with connect() as conn:
-            conn.executescript(SCHEMA_V1 + SCHEMA_V2 + SCHEMA_V3 + SCHEMA_V4 + SCHEMA_V5 + SCHEMA_V6 + SCHEMA_V7)
+            conn.executescript(SCHEMA_V1 + SCHEMA_V2 + SCHEMA_V3 + SCHEMA_V4 + SCHEMA_V5 + SCHEMA_V6 + SCHEMA_V7 + SCHEMA_V8)
             pid = _insert_default_project(conn)
             _seed(conn, pid)
             conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
@@ -328,6 +335,9 @@ def init_db():
         version = 6
     if version == 6:
         _migrate_v6_to_v7()
+        version = 7
+    if version == 7:
+        _migrate_v7_to_v8()
 
 
 def _migrate_v6_to_v7():
@@ -338,6 +348,16 @@ def _migrate_v6_to_v7():
     with connect() as conn:
         conn.executescript(SCHEMA_V7)
         conn.execute("PRAGMA user_version = 7")
+
+
+def _migrate_v7_to_v8():
+    """deep_review_runs.review_reason 추가 (기존 run = TRIGGERED). Decision 데이터는 바꾸지 않는다. 백업 후 진행."""
+    backup = DB_PATH.with_name(f"{DB_PATH.stem}.v7-backup-{datetime.now():%Y%m%d-%H%M%S}{DB_PATH.suffix}")
+    shutil.copy2(DB_PATH, backup)
+    print(f"[migration] v7 → v8 (deep_review_runs.review_reason), backup: {backup}")
+    with connect() as conn:
+        conn.executescript(SCHEMA_V8)
+        conn.execute("PRAGMA user_version = 8")
 
 
 def _audio_title_origin(title: str, original_filename: str) -> str:
@@ -1235,15 +1255,16 @@ def _deep_review_row(row: sqlite3.Row) -> dict:
 
 
 def create_deep_review_run(project_id: int, decision_id: str, review_event_id: int | None,
-                           review_state_changed_at: str | None, input_snapshot: dict) -> dict:
+                           review_state_changed_at: str | None, input_snapshot: dict,
+                           review_reason: str = "TRIGGERED") -> dict:
     now = _now()
     try:
         with connect() as conn:
             cur = conn.execute(
                 """INSERT INTO deep_review_runs (project_id, decision_id, review_event_id, review_state_changed_at, status,
-                       input_snapshot_json, paperclip_json, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, 'PENDING', ?, '{}', ?, ?)""",
-                (project_id, decision_id, review_event_id, review_state_changed_at,
+                       review_reason, input_snapshot_json, paperclip_json, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, 'PENDING', ?, ?, '{}', ?, ?)""",
+                (project_id, decision_id, review_event_id, review_state_changed_at, review_reason,
                  json.dumps(input_snapshot, ensure_ascii=False), now, now),
             )
             run_id = cur.lastrowid

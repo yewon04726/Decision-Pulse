@@ -1,7 +1,7 @@
-import { Link2Off, UserCheck } from "lucide-react";
+import { MappingBadge } from "@/components/decision/status-badge";
 import { formatMetricValue, formatNumber, formatReviewTrigger, formatTriggerRaw, metricKey, metricLabel, needsMapping } from "@/lib/metrics";
 import { cn } from "@/lib/utils";
-import type { ManualTrigger, MetricTrigger, ReviewTrigger, TriggerEvaluation } from "@/lib/types";
+import type { ManualTrigger, MetricTrigger, ReviewTrigger, TriggerEvaluation, TriggerStatus } from "@/lib/types";
 
 /**
  * 재검토 조건 vs 현재 metric 비교.
@@ -66,44 +66,39 @@ export function TriggerGauge({
   );
 }
 
-/** check_metric으로 판정할 수 없는 조건: 원문 그대로 보여주고 사람이 확인 */
+/** 사람이 확인하는 조건 (MANUAL): 원문 그대로 */
 export function ManualTriggerView({ trigger, size = "md" }: { trigger: ManualTrigger; size?: "sm" | "md" }) {
   return (
     <div>
-      <span className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
-        <UserCheck className="size-3" />
-        사람이 확인
-      </span>
+      <MappingBadge status="MANUAL" />
       <p className={cn("mt-1.5 text-ink-2", size === "sm" ? "line-clamp-2 text-xs" : "text-sm")}>{trigger.description}</p>
     </div>
   );
 }
 
-/** V2 조건(event, duration, date, compound, 매핑 안 된 metric): 한 줄 요약 + 원문. 자동 판정하지 않는 조건이다 */
-export function V2TriggerView({ trigger, size = "md" }: { trigger: ReviewTrigger; size?: "sm" | "md" }) {
+/** 자동 평가하지 않는 조건 (NEEDS_MAPPING: 데이터 소스 미연결 / MANUAL: event · duration · date · compound): 요약 + 원문 */
+export function V2TriggerView({
+  trigger,
+  status,
+  size = "md",
+}: {
+  trigger: ReviewTrigger;
+  status?: TriggerStatus | null;
+  size?: "sm" | "md";
+}) {
   const raw = trigger.raw_condition ?? ("description" in trigger ? trigger.description : null);
   const summary = formatReviewTrigger(trigger);
+  const mapping = status?.mapping_status ?? (needsMapping(trigger) ? "NEEDS_MAPPING" : "MANUAL");
   return (
     <div>
-      <div className="flex flex-wrap items-center gap-1">
-        <span className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
-          <UserCheck className="size-3" />
-          사람이 확인
-        </span>
+      <div className="flex flex-wrap items-center gap-1.5">
+        <MappingBadge status={mapping} />
         {trigger.type === "compound" && (
           <span className="rounded border border-line-strong px-1 text-[10px] font-semibold text-ink-2">{trigger.logic}</span>
         )}
-        {needsMapping(trigger) && (
-          <span className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-accent-ink">
-            <Link2Off className="size-3" />
-            지표 매핑 필요
-          </span>
-        )}
       </div>
       <p className={cn("mt-1.5 font-mono text-ink-2", size === "sm" ? "line-clamp-2 text-[11px]" : "text-xs")}>{summary}</p>
-      {raw && raw !== summary && (
-        <p className={cn("mt-1 text-muted", size === "sm" ? "line-clamp-2 text-[11px]" : "text-xs")}>원문: {raw}</p>
-      )}
+      {size === "md" && raw && raw !== summary && <p className="mt-1 text-xs text-muted">원문: {raw}</p>}
     </div>
   );
 }
@@ -111,16 +106,21 @@ export function V2TriggerView({ trigger, size = "md" }: { trigger: ReviewTrigger
 export function ReviewTriggerView({
   trigger,
   evaluation,
+  status,
   size = "md",
 }: {
   trigger: ReviewTrigger;
   evaluation: TriggerEvaluation | null;
+  status?: TriggerStatus | null;
   size?: "sm" | "md";
 }) {
+  // 자동 평가 게이지는 CONNECTED 단일 metric 조건만. 나머지는 자동화 상태 + 요약
+  if (status && status.mapping_status !== "CONNECTED") {
+    return trigger.type === "manual" ? <ManualTriggerView trigger={trigger} size={size} /> : <V2TriggerView trigger={trigger} status={status} size={size} />;
+  }
   if (trigger.type === "manual") return <ManualTriggerView trigger={trigger} size={size} />;
-  // 자동 판정 게이지는 등록된 지표의 단일 metric 조건만. 나머지 V2 조건은 요약으로 표시한다
   if (trigger.type === "metric" && metricKey(trigger)) {
     return evaluation ? <TriggerGauge trigger={trigger} evaluation={evaluation} size={size} /> : null;
   }
-  return <V2TriggerView trigger={trigger} size={size} />;
+  return <V2TriggerView trigger={trigger} status={status} size={size} />;
 }

@@ -40,6 +40,7 @@ Review Event ──▶ Web alert (모든 Workspace 화면 상단)
 REVIEW_DUE
       ├─ Review Memo   (Normal Review: 사용자 요청 시, Hermes 단일 agent + read-only MCP)
       └─ Deep Review   (고신뢰: 사용자 요청 시, Paperclip → Evidence Researcher → Decision Analyst → Review Critic)
+                        ※ Deep Review는 ACTIVE / Needs mapping / Manual review 결정에서도 수동 실행 가능 (review_reason=MANUAL)
             ──▶ 사람이 재검토 (Decision은 자동으로 바뀌지 않는다)
 ```
 
@@ -127,15 +128,28 @@ cd web && npm run dev          # http://localhost:3000
 
 ## Review Trigger와 판정
 
-| type | 자동 판정 | 설명 |
-| --- | --- | --- |
-| `metric` (등록된 지표) | O | `user_count`, `search_api_p95_ms`, `server_count` (`config.KNOWN_METRICS`) |
-| `metric` (미등록 지표) | X | "지표 매핑 필요" |
-| `compound` (AND/OR) | X | 예: `search_api_p95_ms > 800 AND 3일 연속` — 사람이 확인 |
-| `event`, `duration`, `date`, `manual` | X | 원문 조건을 보여주고 사람이 확인 |
+```
+Decision → Review Trigger → Canonical Metric → (resolver) Data Source Adapter → Observed Value
+```
 
-- 판정 코드: `services/review.py` (`evaluate_trigger`, `display_status`). `/api/decisions`, Review Monitor, Demo 미리보기가 같은 함수를 쓴다.
-- check_metric 조회 실패 → `UNKNOWN` (이벤트 없음).
+Decision은 특정 DB/API를 알지 않는다. 지표 정의는 **Canonical Metric Registry**(`backend/metric_registry.py`) 한 곳에 있다.
+
+| mapping_status | 의미 | Review Monitor | 화면 |
+| --- | --- | --- | --- |
+| `CONNECTED` | registry 지표에 resolver(data source adapter)가 있고 프로젝트에 metric source가 연결됨 | 자동 평가 → ACTIVE / REVIEW_DUE (읽기 실패면 UNKNOWN) | ● 자동 모니터링 + 현재값 + 데이터 소스 |
+| `NEEDS_MAPPING` | 측정 가능한 수치 조건인데 연결된 data source가 없음 (registry에 resolver 없음 / 미등록 지표 / 프로젝트 미연결) | 평가·이벤트 없음 | ○ 데이터 연결 필요 |
+| `MANUAL` | 객관적 자동 측정값으로 표현하기 어려움 (manual / event / date / duration / 주관적 표현 / compound) | 평가·이벤트 없음 | ○ 수동 확인 필요 |
+
+- `UNKNOWN`은 **CONNECTED인데 지금 값을 읽지 못한** 평가 결과다 (`evaluation_status`). 연결 안 된 지표를 UNKNOWN으로 표시하지 않는다.
+- 상태는 저장하지 않고 읽을 때 registry로 계산한다 (`services/trigger_status.py`). API: `DecisionView.trigger_status`
+  `{mapping_status, evaluation_status, canonical_metric, metric_label, resolver, data_source, window, reason}`. 기존 필드는 그대로.
+- 연결된 지표: `user_count`(sqlite:users), `search_api_p95_ms`, `server_count`(metrics table) — 기존 check_metric resolver 재사용.
+- 정의만 있는 지표(NEEDS_MAPPING): `deployment_count`, `error_rate`, `monthly_revenue`, `failed_job_count`, `daily_log_volume_gb`.
+- alias 정규화: 원문 지표 표현 → canonical 이름. 완전 일치 + 단위 호환만 (LLM이 지표 이름을 만들지 않는다). 집계 기간(`일주일에 5회` → `7d`)은 원문에서 읽는다.
+- 추출 시 주관적 표현(불만, 부담, 판단, 전략 …)의 metric은 validator가 `manual`로 내린다. 등록 안 된 수치 지표는 실패가 아니라 NEEDS_MAPPING으로 저장된다.
+- **새 data source 붙이는 곳**: `services/metric_adapters.py`에 adapter(`resolve(project, names) -> (readings, errors)`)를 구현해
+  `ADAPTERS`에 등록하고, registry 지표의 `resolver`를 그 이름으로 바꾼다. 저장된 Decision은 고치지 않아도 CONNECTED가 된다.
+- 판정 코드: `services/review.py` (`evaluate_trigger`, `display_status`, `to_view`). `/api/decisions`, Review Monitor, Demo 미리보기가 같은 함수를 쓴다.
 
 ### Review Monitor (`services/review_monitor.py`)
 
@@ -160,7 +174,14 @@ cd web && npm run dev          # http://localhost:3000
 자세한 설계: [docs/architecture/deep_review.md](docs/architecture/deep_review.md)
 
 - 일반 검토는 저비용 Review Memo(single agent), 고신뢰 검토는 Deep Review, **최종 결정은 항상 사람**. Review Memo를 대체하지 않는다.
-- REVIEW_DUE 결정 상세에서 **Run Deep Review**를 눌렀을 때만 시작한다 (REVIEW_DUE 자동 실행 없음, heartbeat 타이머 없음).
+- 유효한(active) Decision 상세에서 **Run Deep Review**를 눌렀을 때만 시작한다 (자동 실행 없음, heartbeat 타이머 없음).
+  - **REVIEW_DUE = 시스템이 '지금 재검토할 시점'이라고 판단한 상태 / Deep Review = 사람이 필요할 때 실행하는 분석.**
+    REVIEW_DUE가 아니어도(ACTIVE, UNKNOWN, NEEDS_MAPPING, MANUAL) 실행할 수 있다. 막는 경우: 없는/대체된 Decision, 진행 중 run, 기능 꺼짐.
+  - `review_reason`: 시작 시점에 REVIEW_DUE면 `TRIGGERED`, 아니면 `MANUAL` (누가 눌렀는지가 아니라 왜 재검토 대상인지).
+  - **Deep Review 실행 ≠ REVIEW_DUE 전환**: review state / review event / Telegram / trigger 평가는 바뀌지 않는다.
+  - snapshot에 실행 시점 `review_reason` / `review_state` / `mapping_status` / `current_value`를 고정한다. 현재 관측값이 없으면
+    (NEEDS_MAPPING: metric not mapped, MANUAL: 사람이 판단) backend가 unknown을 결정적으로 넣고, `FACT:observed`를 근거로 쓸 수 없게 한다.
+    agent가 값을 만들거나 manual run에서 trigger 충족을 주장하면 거부(Researcher) 또는 unsupported claim(Critic).
 - Paperclip = control plane: company `Decision Pulse Deep Review`, 보고선 Evidence Researcher → Decision Analyst → Review Critic,
   결정 1건 = parent ticket 1개 + 역할별 하위 ticket (역할당 1 agent, atomic checkout), 월 budget hard stop.
 - 역할 / 권한
@@ -212,11 +233,11 @@ Hermes가 stdio subprocess로 띄운다 (`~/.hermes/config.yaml`의 `mcp_servers
 | `POST /api/candidates/delete` | ignored 후보 기록 삭제 (Source / Decision은 유지) |
 | `GET /api/review-events`, `POST /api/review-events/{id}/acknowledge` | Review Monitor 이벤트 |
 | `POST /api/decisions/{id}/review-memo`, `GET .../review-memos`, `GET /api/review-memos/{id}` | Review Memo |
-| `POST /api/decisions/{id}/deep-review?project_id=`, `GET /api/decisions/{id}/deep-reviews`, `GET /api/deep-reviews/{run_id}`, `GET /api/deep-review/status` | Deep Review (202 + PENDING / 409 진행 중·REVIEW_DUE 아님 / 503 꺼짐) |
+| `POST /api/decisions/{id}/deep-review?project_id=`, `GET /api/decisions/{id}/deep-reviews`, `GET /api/deep-reviews/{run_id}`, `GET /api/deep-review/status` | Deep Review (202 + PENDING, `review_reason` TRIGGERED | MANUAL / 404 없음 / 409 진행 중·대체된 Decision / 503 꺼짐) |
 | `POST /api/agent/chat` | Ask Agent (Dify Chatflow proxy) |
 | `GET /api/demo/status`, `GET /api/demo/state`, `GET /api/demo/state/{metric}/preview`, `PATCH /api/demo/state/{metric}`, `POST /api/demo/reset` | Demo Control Center (Demo Mode일 때만) |
 
-## DB (SQLite, `PRAGMA user_version = 7`)
+## DB (SQLite, `PRAGMA user_version = 8`)
 
 | 테이블 | 내용 |
 | --- | --- |
@@ -229,7 +250,7 @@ Hermes가 stdio subprocess로 띄운다 (`~/.hermes/config.yaml`의 `mcp_servers
 | `decision_review_state`, `review_events` | Review Monitor 기준 상태 / 변화 이력 (v2) |
 | `decision_knowledge_sync` | gbrain 동기화 상태 (v4) |
 | `decision_review_memos` | Review Memo + 생성 시점 snapshot + tool_audit (v5) |
-| `deep_review_runs`, `deep_review_artifacts` | Deep Review run (상태 / verdict / Paperclip 식별자 / 시작 시점 snapshot) + 역할별 검증된 JSON (v7) |
+| `deep_review_runs`, `deep_review_artifacts` | Deep Review run (상태 / verdict / Paperclip 식별자 / 시작 시점 snapshot) + 역할별 검증된 JSON (v7). `review_reason` TRIGGERED / MANUAL (v8, 기존 run은 TRIGGERED) |
 
 ---
 
@@ -263,7 +284,7 @@ Hermes가 stdio subprocess로 띄운다 (`~/.hermes/config.yaml`의 `mcp_servers
 ## 테스트
 
 ```bash
-cd backend && .venv/bin/python -m unittest discover -s tests   # 147개 (실제 Telegram / Hermes / gbrain / Paperclip / LLM 호출 없음)
+cd backend && .venv/bin/python -m unittest discover -s tests   # 162개 (실제 Telegram / Hermes / gbrain / Paperclip / LLM 호출 없음)
 cd web && npm run lint && npx tsc --noEmit && npm test && npm run build   # npm test: Node 내장 test runner (lib/*.test.ts)
 ```
 
@@ -290,12 +311,13 @@ backend/
 ├─ config.py           .env 로드, 연결 설정, 지표 registry, Demo baseline / 시나리오
 ├─ db.py               스키마 v1~v6 + migration + CRUD
 ├─ schemas.py          Pydantic 모델 (Review Trigger V2 포함)
+├─ metric_registry.py  Canonical Metric Registry (지표 정의, alias, resolver 이름)
 ├─ mcp_server.py       Hermes용 read-only MCP (stdio)
 ├─ deep_review_worker.py  Paperclip process adapter worker (researcher / analyst / critic)
 ├─ services/           review, review_monitor, review_trigger, review_memo, telegram_notifier,
 │                      extraction, metrics, stt, audio_ingest, source_title, knowledge_sync,
 │                      gbrain_sync, decision_read, demo_state, dify, text,
-│                      deep_review, deep_review_contract, paperclip_client
+│                      deep_review, deep_review_contract, paperclip_client, metric_adapters, trigger_status
 ├─ scripts/            위 운영 script
 └─ tests/              unittest (fake_hermes / fake_gbrain 포함)
 
@@ -318,7 +340,8 @@ docs/evals/           Single vs Multi 평가 결과
 ## 알려진 제한
 
 - **중복 Source 방지 없음**: 같은 원문을 다시 Extract하면 새 Source가 생긴다. 과거 중복은 `dedupe_sources.py`로 정리했다 (2026-11-13, 60 → 28).
-- **compound / duration 조건은 자동 판정하지 않는다** (예: `MVP 레디스 미도입`). Demo에서 latency를 올려도 이 결정은 REVIEW_DUE가 되지 않는다.
+- **compound / duration 조건은 자동 판정하지 않는다** (MANUAL, 예: `MVP 레디스 미도입`). Demo에서 latency를 올려도 이 결정은 REVIEW_DUE가 되지 않는다.
+- NEEDS_MAPPING 지표의 실제 connector(GitHub Actions, Prometheus, Stripe …)는 아직 없다. 화면의 '지표 연결' 버튼은 비활성.
 - metric source는 기본 프로젝트(`check_metric_default`)만 연결되어 있다. 다른 프로젝트의 metric 조건은 `Metric not connected`.
 - `backend/.env.example`은 초기 4개 키 + Deep Review 키만 담고 있다 — 전체 목록은 위 환경 변수 표 참고.
 - Deep Review의 ticket 접두어는 Paperclip이 company 이름으로 정해 `DEC-7`처럼 보인다 (Decision ID와 혼동 주의, 변경 API 없음).

@@ -1,6 +1,6 @@
 # Normal Review vs Deep Review
 
-Decision Pulse는 REVIEW_DUE 결정에 대해 두 가지 검토를 제공한다. 둘 다 **advisory** 산출물이며 Decision을 바꾸지 않는다.
+Decision Pulse는 결정에 대해 두 가지 검토를 제공한다 (Review Memo는 REVIEW_DUE에서만, Deep Review는 유효한 모든 결정에서 사람이 실행). 둘 다 **advisory** 산출물이며 Decision을 바꾸지 않는다.
 
 | | Normal Review (Review Memo) | Deep Review |
 | --- | --- | --- |
@@ -34,6 +34,29 @@ Agents never autonomously modify confirmed Decisions.**
 
 ---
 
+## 실행 조건 (entry condition)
+
+```
+REVIEW_DUE  = 시스템(Review Monitor)이 "지금 재검토할 시점"이라고 판단한 상태
+Deep Review = 사람이 필요할 때 실행하는 분석 기능          →  Deep Review 실행 ≠ REVIEW_DUE 전환
+```
+
+| 결정 상태 | 실행 | review_reason | snapshot의 현재 상태 |
+| --- | --- | --- | --- |
+| CONNECTED + REVIEW_DUE | 가능 (강하게 안내) | TRIGGERED | trigger_condition_met = true, 관측값 있음 |
+| CONNECTED + ACTIVE | 가능 (보조) | MANUAL | trigger_condition_met = false (마지막 확인 미충족) |
+| CONNECTED + UNKNOWN | 가능 (보조) | MANUAL | current_value = read_failed / not_observed |
+| NEEDS_MAPPING | 가능 | MANUAL | current_value = metric_not_mapped (값 없음) |
+| MANUAL trigger | 가능 | MANUAL | current_value = manual_trigger, 충족 여부는 사람 판단 |
+| 없음 / 대체됨 / 진행 중 run / 기능 꺼짐 | 404 / 409 / 409 / 503 | — | — |
+
+- `review_reason`은 시작 시점 상태로 backend가 정한다 (REVIEW_DUE면 버튼을 눌러도 TRIGGERED). `deep_review_runs.review_reason` (v8).
+- 수동 실행은 review state / review event / Telegram / trigger 평가를 건드리지 않는다 (테스트: 보호 테이블 dump 비교).
+- 현재 상태 부재는 실패가 아니다: backend가 `required_unknowns`를 Researcher 결과에 넣고, 관측값이 없으면 `FACT:observed` reference를 막는다.
+  Analyst는 unknowns + recommended_checks를 1개 이상 남겨야 한다. Researcher의 `confirmed_review_due`가 실행 사유와 다르면 거부.
+- Critic은 manual run의 trigger 충족 주장, NEEDS_MAPPING의 metric 값 주장을 unsupported claim으로 본다 → REVISE → (1회 후) HUMAN_REVIEW_REQUIRED.
+- Review Memo(single agent)의 실행 조건은 바꾸지 않았다 (REVIEW_DUE만, 아니면 409 `not_review_due`).
+
 ## 역할 분담
 
 | 구성 요소 | 하는 일 | 하지 않는 일 |
@@ -48,7 +71,7 @@ Agents never autonomously modify confirmed Decisions.**
 
 ```
 POST /api/decisions/{id}/deep-review
-  → REVIEW_DUE 확인 (Review Memo와 같은 read service) · 진행 중 run 없음 확인
+  → 유효한 active Decision · 진행 중 run 없음 확인 · review_reason(TRIGGERED | MANUAL) 결정 (Review Memo와 같은 read service, 읽기만)
   → deep_review_runs: PENDING + Authoritative Facts snapshot
   → Paperclip parent ticket "Deep Review: <id>" + "Collect authoritative evidence" (Evidence Researcher 배정) → RESEARCHING
 backend monitor (3초)
@@ -101,9 +124,9 @@ reference 형식: `E<n>` (evidence 줄 — Review Memo와 같은 snapshot ID), `
 | timeout | process: Researcher 330s, Analyst/Critic 300s · 단계 대기 420s (backend) |
 | HITL | Decision 수정·삭제, trigger 수정, 상태 변경, Keep/Revise/Supersede 판단은 agent에게 없음 |
 
-## 데이터 (SQLite v7)
+## 데이터 (SQLite v7, v8: review_reason)
 
-- `deep_review_runs`: decision_id, review_event_id, status, revision_count, final_verdict, input_snapshot_json, paperclip_json(company / project / goal / parent / stage ticket id), error, 시각. 결정당 진행 중 run 1개 (partial unique index)
+- `deep_review_runs`: decision_id, review_event_id, review_reason(v8), status, revision_count, final_verdict, input_snapshot_json, paperclip_json(company / project / goal / parent / stage ticket id), error, 시각. 결정당 진행 중 run 1개 (partial unique index)
 - `deep_review_artifacts`: run_id, role, iteration, payload_json(검증 통과분만), paperclip issue / run id, meta_json(model, tokens, cost, tool audit)
 
 ## 운영

@@ -32,12 +32,12 @@ from dataclasses import asdict, dataclass, field
 
 import httpx
 
+import metric_registry
+
 from config import (
     EXTRACTION_MODEL,
     EXTRACTION_TIMEOUT,
     LLM_BASE_URL,
-    METRIC_ALIASES,
-    METRIC_UNITS,
     OPENROUTER_API_KEY,
     OPENROUTER_BASE_URL,
     OPENROUTER_MODEL,
@@ -900,20 +900,10 @@ def _alias_key(text: str) -> str:
     return re.sub(r"[\s_()\-]", "", text.lower())
 
 
-_ALIAS_INDEX = {key: {_alias_key(a) for a in aliases} for key, aliases in METRIC_ALIASES.items()}
-_UNIT_INDEX = {key: {_alias_key(u) for u in units} for key, units in METRIC_UNITS.items()}
-
-
 def map_metric_key(raw_metric: str | None, unit: str | None, allowed_metrics: list[str]) -> str | None:
-    """원문 지표 표현 → 등록된 지표 키. alias 완전 일치 + 단위 호환일 때만. 아니면 None (다른 지표로 추측하지 않음)."""
-    if not raw_metric:
-        return None
-    name, unit_key = _alias_key(raw_metric), _alias_key(unit or "")
-    keys = [
-        k for k in allowed_metrics
-        if name in _ALIAS_INDEX.get(k, set()) and (not unit_key or unit_key in _UNIT_INDEX.get(k, set()))
-    ]
-    return keys[0] if len(keys) == 1 else None
+    """원문 지표 표현 → 지표 키 (allowed_metrics 안에서). alias 완전 일치 + 단위 호환일 때만. 아니면 None (추측하지 않음).
+    alias 목록은 Canonical Metric Registry(metric_registry.py) 하나에서 관리한다."""
+    return metric_registry.canonicalize(raw_metric, unit, allowed_metrics)
 
 
 # 비교 표현 → operator. "넘지 않" 같은 부정 표현을 먼저 확인한다.
@@ -982,6 +972,12 @@ def _check_leaf(c: dict, condition: str, allowed_metrics: list[str], single_metr
     problems, notes = [], []
     c = dict(c)
     kind = c.get("type")
+    if kind == "metric" and (map_metric_key(c.get("raw_metric"), c.get("unit"), metric_registry.all_names()) is None
+                             and metric_registry.is_subjective(c.get("raw_metric"), c.get("raw_condition"))):
+        # 수치처럼 보여도 객관적으로 측정할 지표가 아니다 (예: "고객 불만", "운영 부담") → metric으로 억지 변환하지 않는다
+        text = c.get("raw_condition") or condition
+        notes.append(f"측정 가능한 지표가 아니어서 사람 확인 조건(manual)으로 분류: {c.get('raw_metric')}")
+        return {"type": "manual", "description": text, "raw_condition": text, "_demoted": True}, problems, notes
     if kind == "metric":
         threshold = c.get("threshold")
         if not c.get("raw_metric"):
@@ -1003,6 +999,8 @@ def _check_leaf(c: dict, condition: str, allowed_metrics: list[str], single_metr
         c["unit"] = c.get("unit") or None
         # 지표 매핑은 backend가 한다 (LLM 값은 쓰지 않음)
         c["metric_key"] = map_metric_key(c.get("raw_metric"), c.get("unit"), allowed_metrics)
+        # 연결 여부와 무관한 canonical 지표 (registry에 있으면 NEEDS_MAPPING이라도 이름을 통일한다)
+        c["canonical_metric"] = c["metric_key"] or metric_registry.canonicalize(c.get("raw_metric"), c.get("unit"))
     elif kind == "duration":
         value, unit = c.get("value"), c.get("unit")
         if isinstance(value, float) and value.is_integer():
@@ -1070,7 +1068,9 @@ def _missing_parts(t: dict, condition: str) -> list[str]:
     metric_values = {float(c["threshold"]) for c in leaves if c.get("type") == "metric" and isinstance(c.get("threshold"), (int, float))}
     duration_values = {float(c["value"]) for c in leaves if c.get("type") == "duration" and isinstance(c.get("value"), (int, float))}
     names = " ".join(c.get("raw_metric") or "" for c in leaves if c.get("type") == "metric")
-    texts = " ".join(c.get("description") or "" for c in leaves if c.get("type") in ("event", "manual"))
+    texts = " ".join(c.get("description") or "" for c in leaves if c.get("type") in ("event", "manual") and not c.get("_demoted"))
+    # validator가 주관적 조건으로 판단해 manual로 내린 조건의 숫자는 의도적으로 metric이 아니다
+    demoted = " ".join(c.get("description") or "" for c in leaves if c.get("_demoted"))
     for value, end in _number_spans(condition):
         if not _operators_in(condition[end:end + 12]):
             continue
@@ -1078,7 +1078,7 @@ def _missing_parts(t: dict, condition: str) -> list[str]:
         tail = condition[end:end + 12]
         cut = min((tail.find(w) + len(w) for w, _ in _OPERATOR_WORDS if w in tail), default=len(tail))
         phrase = condition[:end].split()[-1] + tail[:cut]  # 예) "2건 이상"
-        if value in metric_values or value in duration_values or shown in names:
+        if value in metric_values or value in duration_values or shown in names or shown in demoted:
             continue
         if shown in texts:
             problems.append(f"숫자 비교 '{phrase.strip()}'를 event/manual 설명에 넣었다. metric(operator, threshold)으로 나눠라")

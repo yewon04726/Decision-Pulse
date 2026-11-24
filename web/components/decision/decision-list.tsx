@@ -5,41 +5,48 @@ import { useSearchParams } from "next/navigation";
 import { Search } from "lucide-react";
 import { EmptyState } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
-import type { DecisionView, DisplayStatus } from "@/lib/types";
+import { reviewBucket, type ReviewBucket } from "@/lib/metrics";
+import type { DecisionView } from "@/lib/types";
 import { DecisionRow } from "./decision-row";
 
-const FILTERS: { value: DisplayStatus | "ALL"; label: string }[] = [
+// Active / Review due / Unknown = 자동 평가되는 결정의 review state. 데이터 연결이 필요하거나 사람이 확인하는 조건은 따로
+const FILTERS: { value: ReviewBucket | "ALL"; label: string }[] = [
   { value: "ALL", label: "All" },
   { value: "REVIEW_DUE", label: "Review due" },
   { value: "ACTIVE", label: "Active" },
+  { value: "NEEDS_MAPPING", label: "Needs mapping" },
+  { value: "MANUAL", label: "Manual review" },
   { value: "PENDING_REVIEW", label: "Pending review" },
   { value: "SUPERSEDED", label: "Superseded" },
   { value: "UNKNOWN", label: "Unknown" },
 ];
 
 // REVIEW_DUE를 항상 맨 앞에
-const ORDER: Record<DisplayStatus, number> = { REVIEW_DUE: 0, UNKNOWN: 1, PENDING_REVIEW: 2, ACTIVE: 3, SUPERSEDED: 4 };
+const ORDER: Record<ReviewBucket, number> = {
+  REVIEW_DUE: 0, UNKNOWN: 1, PENDING_REVIEW: 2, ACTIVE: 3, NEEDS_MAPPING: 4, MANUAL: 5, SUPERSEDED: 6,
+};
+const HIDE_WHEN_EMPTY = new Set<ReviewBucket | "ALL">(["UNKNOWN", "NEEDS_MAPPING", "MANUAL"]);
 
 export function DecisionList({ decisions }: { decisions: DecisionView[] }) {
   const searchParams = useSearchParams();
-  const initial = (searchParams.get("status") as DisplayStatus | null) ?? "ALL";
-  const [filter, setFilter] = useState<DisplayStatus | "ALL">(initial);
+  const initial = (searchParams.get("status") as ReviewBucket | null) ?? "ALL";
+  const [filter, setFilter] = useState<ReviewBucket | "ALL">(initial);
   const [query, setQuery] = useState("");
 
   const q = query.trim().toLowerCase();
   const visible = decisions
-    .filter((d) => filter === "ALL" || d.display_status === filter)
+    .filter((d) => filter === "ALL" || reviewBucket(d) === filter)
     .filter((d) => !q || [d.topic, d.title, d.decision, d.rationale, d.id].join(" ").toLowerCase().includes(q))
-    .sort((a, b) => ORDER[a.display_status] - ORDER[b.display_status]);
+    .sort((a, b) => ORDER[reviewBucket(a)] - ORDER[reviewBucket(b)]);
 
-  const count = (s: DisplayStatus | "ALL") =>
-    s === "ALL" ? decisions.length : decisions.filter((d) => d.display_status === s).length;
+  const count = (s: ReviewBucket | "ALL") =>
+    s === "ALL" ? decisions.length : decisions.filter((d) => reviewBucket(d) === s).length;
 
   return (
     <>
       <div className="flex flex-col gap-4 border-b border-ink lg:flex-row lg:items-end lg:justify-between">
         <div className="-mb-px flex gap-6 overflow-x-auto [scrollbar-width:none]" role="tablist" aria-label="Filter by status">
-          {FILTERS.filter((f) => f.value !== "UNKNOWN" || count("UNKNOWN") > 0).map((f) => (
+          {FILTERS.filter((f) => !HIDE_WHEN_EMPTY.has(f.value) || count(f.value) > 0 || filter === f.value).map((f) => (
             <button
               key={f.value}
               role="tab"

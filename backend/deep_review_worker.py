@@ -59,7 +59,9 @@ def _mask(text: str) -> str:
 
 
 def research_prompt(inp: dict) -> str:
-    snapshot = {k: inp[k] for k in ("decision_id", "authoritative_facts", "observed_state", "evidence_items")}
+    keys = ("decision_id", "review_reason", "review_state", "mapping_status", "authoritative_facts", "observed_state",
+            "required_unknowns", "evidence_items")
+    snapshot = {k: inp[k] for k in keys if k in inp}
     return (
         instructions("researcher")
         + "\n\n---\n대상 ticket 입력 (deep-review-input, backend snapshot):\n```json\n"
@@ -124,10 +126,14 @@ def run_researcher(inp: dict) -> tuple[dict, dict]:
 
 def llm_messages(role: str, inp: dict) -> list[dict]:
     data = {k: v for k, v in inp.items() if k not in ("role", "iteration")}
+    # backend 검증과 같은 함수로 계산한 '사용 가능한 reference' 목록. 비어 있는 사실(rationale 없음 등)과
+    # 현재 관측값이 없을 때의 FACT:observed는 목록에 없다 → 기록이 적은 결정에서 없는 reference를 쓰지 않게 한다
+    refs = sorted(contract.known_refs(inp["research"])) if isinstance(inp.get("research"), dict) else []
+    note = ("\n사용 가능한 reference (이 목록에 있는 값만, 철자 그대로): " + ", ".join(refs)) if refs else ""
     return [
         {"role": "system", "content": instructions(role)},
         {"role": "user", "content": "deep-review-input:\n```json\n" + json.dumps(data, ensure_ascii=False, indent=2)
-                                    + "\n```\n출력 JSON만 쓴다."},
+                                    + "\n```" + note + "\n출력 JSON만 쓴다."},
     ]
 
 

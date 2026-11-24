@@ -5,14 +5,15 @@ import { Bot, Sparkles } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import { Field, Skeleton } from "@/components/ui/card";
 import { ButtonLink } from "@/components/ui/button";
-import { HumanAuthoredTag, SourceTypeBadge, StatusBadge, TopicTag } from "@/components/decision/status-badge";
+import { HumanAuthoredTag, MappingBadge, ReviewStateBadge, SourceTypeBadge, TopicTag } from "@/components/decision/status-badge";
 import { TriggerGauge, V2TriggerView } from "@/components/decision/trigger-gauge";
 import { METRIC_TOOL_COMMAND, ServiceAlert } from "@/components/layout/service-alert";
-import { DeepReviewPanel } from "@/components/review/deep-review-panel";
+import { DeepReviewPanel, type DeepReviewMode } from "@/components/review/deep-review-panel";
 import { ReviewMemoPanel } from "@/components/review/review-memo-panel";
 import { getDecision, getSources } from "@/lib/api";
 import { getCurrentProject } from "@/lib/project";
-import { formatMetricValue, formatNumber, formatTrigger, metricKey, metricLabel } from "@/lib/metrics";
+import { formatMetricValue, formatNumber, formatReviewTrigger, formatTrigger, metricKey, metricLabel } from "@/lib/metrics";
+import type { ReviewTrigger, TriggerStatus } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 export default function DecisionDetailPage({ params }: PageProps<"/decisions/[id]">) {
@@ -50,6 +51,20 @@ async function DecisionDetail({ id }: { id: string }) {
 
   const { display_status: status, evaluation } = decision;
   const trigger = decision.review_trigger;
+  const ts = decision.trigger_status ?? null;
+  // Deep Review는 유효한(active) 모든 Decision에서 사람이 실행할 수 있다. 실행해도 review 상태는 바뀌지 않는다
+  const deepReviewMode: DeepReviewMode | null =
+    decision.status !== "active"
+      ? null
+      : status === "REVIEW_DUE"
+        ? "REVIEW_DUE"
+        : ts?.mapping_status === "NEEDS_MAPPING"
+          ? "NEEDS_MAPPING"
+          : !ts || ts.mapping_status === "MANUAL"
+            ? "MANUAL"
+            : status === "UNKNOWN"
+              ? "UNKNOWN"
+              : "ACTIVE";
   const sourceById = new Map(sources.map((s) => [s.id, s]));
   const linkedSources = [...new Set(decision.evidence.map((e) => e.source_id))]
     .map((sid) => sourceById.get(sid))
@@ -69,7 +84,7 @@ async function DecisionDetail({ id }: { id: string }) {
         title={decision.title}
         description={
           <span className="flex flex-col gap-3">
-            <StatusBadge status={status} />
+            <ReviewStateBadge decision={decision} />
             <span className="text-[17px] text-ink-2">{decision.decision}</span>
           </span>
         }
@@ -114,7 +129,7 @@ async function DecisionDetail({ id }: { id: string }) {
       )}
 
       <ReviewMemoPanel decisionId={decision.id} reviewDue={status === "REVIEW_DUE"} />
-      <DeepReviewPanel decisionId={decision.id} projectId={decision.project_id} reviewDue={status === "REVIEW_DUE"} />
+      <DeepReviewPanel decisionId={decision.id} projectId={decision.project_id} mode={deepReviewMode} />
 
       <div className="grid gap-14 lg:grid-cols-[1.5fr_1fr] lg:gap-12">
         <div className="space-y-14">
@@ -195,19 +210,16 @@ async function DecisionDetail({ id }: { id: string }) {
                     {trigger.raw_condition ?? ("description" in trigger ? trigger.description : null) ?? "-"}
                   </span>
                 </Field>
-                {trigger.type === "manual" ? (
-                  <div className="rounded-xl bg-soft p-4 text-sm text-ink-2">
-                    <div className="font-semibold text-ink">사람이 확인</div>
-                    <p className="mt-1 text-xs leading-relaxed">
-                      이 조건에 필요한 지표가 check_metric에 없어 자동으로 판정하지 않습니다. 조건 발생 여부를 사람이 확인해야 합니다.
-                    </p>
-                  </div>
+                {ts?.mapping_status === "NEEDS_MAPPING" ? (
+                  <NeedsMappingPanel trigger={trigger} status={ts} />
+                ) : ts?.mapping_status === "MANUAL" ? (
+                  <ManualPanel trigger={trigger} status={ts} />
                 ) : trigger.type !== "metric" || !metricKey(trigger) ? (
-                  // event / duration / date / compound / 매핑 안 된 metric: 자동 판정하지 않고 요약만 표시
-                  <V2TriggerView trigger={trigger} />
+                  <V2TriggerView trigger={trigger} status={ts} />
                 ) : (
                   evaluation && (
                     <>
+                      <ConnectedHeader status={ts} />
                       <dl className="grid grid-cols-2 gap-4">
                         <Field label="Condition">{formatTrigger(trigger)}</Field>
                         <Field label="Current metric">
@@ -284,5 +296,67 @@ async function DecisionDetail({ id }: { id: string }) {
         </div>
       </div>
     </>
+  );
+}
+
+/** CONNECTED: ● 자동 모니터링 + 데이터 소스. 값을 읽지 못하면(UNKNOWN) 이유 표시 — '연결 안 됨'과 다르다 */
+function ConnectedHeader({ status }: { status: TriggerStatus | null }) {
+  if (!status) return null;
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <MappingBadge status="CONNECTED" />
+        {status.data_source && (
+          <span className="text-xs text-muted">
+            데이터 소스 <span className="font-mono text-ink-2">{status.data_source}</span>
+          </span>
+        )}
+      </div>
+      {status.evaluation_status === "UNKNOWN" && (
+        <p className="border-l-2 border-danger bg-danger-soft px-3 py-2 text-xs text-danger">{status.reason}</p>
+      )}
+    </div>
+  );
+}
+
+/** NEEDS_MAPPING: ○ 데이터 연결 필요 — 측정 가능한 조건이지만 연결된 데이터 소스가 없다 (UNKNOWN이 아님) */
+function NeedsMappingPanel({ trigger, status }: { trigger: ReviewTrigger; status: TriggerStatus }) {
+  return (
+    <div className="space-y-4 rounded-xl border border-line-strong p-4">
+      <MappingBadge status="NEEDS_MAPPING" />
+      <p className="font-mono text-base text-ink">{formatReviewTrigger(trigger)}</p>
+      <p className="text-sm text-ink-2">{status.reason}</p>
+      <dl className="grid grid-cols-2 gap-3 text-xs">
+        <div>
+          <dt className="eyebrow text-[10px]">Canonical metric</dt>
+          <dd className="mt-1 font-mono text-ink-2">{status.canonical_metric ?? "미등록 지표"}</dd>
+        </div>
+        <div>
+          <dt className="eyebrow text-[10px]">자동 평가</dt>
+          <dd className="mt-1 text-ink-2">보류 (REVIEW_DUE 알림 없음)</dd>
+        </div>
+      </dl>
+      {/* Mapping UI는 아직 없다: 버튼은 비활성 (가짜 connector를 만들지 않는다) */}
+      <button
+        type="button"
+        disabled
+        title="데이터 소스 연결 기능은 아직 준비 중입니다"
+        className="inline-flex h-8 items-center rounded-lg border border-line px-3 text-xs font-medium text-faint"
+      >
+        지표 연결 (준비 중)
+      </button>
+    </div>
+  );
+}
+
+/** MANUAL: ○ 수동 확인 필요 */
+function ManualPanel({ trigger, status }: { trigger: ReviewTrigger; status: TriggerStatus }) {
+  const summary = trigger.type === "manual" || trigger.type === "event" ? null : formatReviewTrigger(trigger);
+  return (
+    <div className="space-y-3 rounded-xl bg-soft p-4">
+      <MappingBadge status="MANUAL" />
+      {summary && <p className="font-mono text-sm text-ink">{summary}</p>}
+      <p className="text-sm text-ink-2">{status.reason}</p>
+    </div>
   );
 }

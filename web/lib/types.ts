@@ -20,8 +20,12 @@ export interface MetricTrigger {
   operator: Operator;
   threshold: number;
   unit?: string | null;
-  /** true = 지표 매핑 필요 */
+  /** true = 자동 평가 가능한(resolver 연결된) 지표가 아님 */
   needs_mapping?: boolean;
+  /** Canonical Metric Registry의 지표 이름 (연결 여부 무관. 예: deployment_count) */
+  canonical_metric?: string | null;
+  /** 집계 기간 (예: "7d" = 일주일에 N회) */
+  window?: string | null;
   raw_condition?: string | null;
   /** 원문 조건 문장 */
   description?: string | null;
@@ -198,9 +202,27 @@ export interface TriggerEvaluation {
 }
 
 /** GET /api/decisions 응답: 저장된 결정 + 계산된 상태 */
+/** 재검토 조건의 자동화 상태 (backend가 registry로 계산)
+ *  CONNECTED: 자동 모니터링 / NEEDS_MAPPING: 측정 가능하지만 데이터 소스 미연결 / MANUAL: 사람이 확인 */
+export type MappingStatus = "CONNECTED" | "NEEDS_MAPPING" | "MANUAL";
+
+export interface TriggerStatus {
+  mapping_status: MappingStatus;
+  /** CONNECTED일 때만: ACTIVE | REVIEW_DUE | UNKNOWN(값을 읽지 못함) */
+  evaluation_status: "ACTIVE" | "REVIEW_DUE" | "UNKNOWN" | null;
+  canonical_metric: string | null;
+  metric_label: string | null;
+  resolver: string | null;
+  data_source: string | null;
+  window: string | null;
+  reason: string;
+}
+
 export interface DecisionView extends Decision {
   display_status: DisplayStatus;
   evaluation: TriggerEvaluation | null;
+  /** 재검토 조건이 없으면 null */
+  trigger_status?: TriggerStatus | null;
 }
 
 /** GET /api/metrics 응답 */
@@ -518,6 +540,8 @@ export interface DeepReviewRun {
   id: number;
   project_id: number;
   decision_id: string;
+  /** 실행 사유: TRIGGERED = 시작 시점 REVIEW_DUE / MANUAL = 그 외 상태에서 사람이 실행 (Deep Review 실행 ≠ REVIEW_DUE) */
+  review_reason: "TRIGGERED" | "MANUAL";
   status: DeepReviewStatus;
   revision_count: number;
   final_verdict: "PASS" | "HUMAN_REVIEW_REQUIRED" | null;

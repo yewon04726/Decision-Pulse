@@ -30,6 +30,29 @@ const STATUS_TEXT: Record<DeepReviewRun["status"], string> = {
   FAILED: "Failed",
 };
 
+export type DeepReviewMode = "REVIEW_DUE" | "ACTIVE" | "UNKNOWN" | "NEEDS_MAPPING" | "MANUAL";
+
+/** 실행 전 안내 문구. REVIEW_DUE만 강하게, 나머지는 사람이 필요할 때 쓰는 보조 기능으로 표시한다 */
+const MODE_TEXT: Record<DeepReviewMode, string> = {
+  REVIEW_DUE: "재검토 조건이 충족되었습니다.",
+  ACTIVE: "현재 자동 재검토 조건은 충족되지 않았습니다. 필요하면 수동으로 심층 검토할 수 있습니다.",
+  UNKNOWN: "현재값을 읽지 못해 자동 판정할 수 없습니다. 필요하면 수동으로 심층 검토할 수 있습니다.",
+  NEEDS_MAPPING: "현재 자동화된 관측 데이터가 연결되지 않았습니다. 현재 상태 없이도 저장된 근거를 기반으로 심층 검토할 수 있습니다.",
+  MANUAL: "이 Decision은 사람이 직접 재검토 시점을 판단해야 합니다.",
+};
+
+const REASON_TEXT: Record<DeepReviewRun["review_reason"], string> = {
+  TRIGGERED: "Triggered review",
+  MANUAL: "Manual review",
+};
+
+const CURRENT_VALUE_TEXT: Record<string, string> = {
+  metric_not_mapped: "현재 관측값 없음 — 지표가 데이터 소스에 연결되지 않음 (metric not mapped)",
+  manual_trigger: "현재 상태 판단 불가 — 사람이 판단하는 조건 (manual trigger)",
+  read_failed: "현재 관측값 없음 — 마지막 확인에서 값을 읽지 못함",
+  not_observed: "현재 관측값 없음 — 아직 기록되지 않음",
+};
+
 function time(iso: string | null) {
   return iso ? iso.replace("T", " ").slice(0, 19) : "-";
 }
@@ -43,7 +66,16 @@ function latest<T>(run: DeepReviewRun, role: DeepReviewArtifact["role"]): T | nu
  * Deep Review — Paperclip 조직(Evidence Researcher → Decision Analyst → Review Critic)의 교차 검증 검토.
  * 기존 Review Memo(single agent)와 별개. advisory 산출물: Decision / review 상태를 바꾸지 않는다. 최종 판단은 사람.
  */
-export function DeepReviewPanel({ decisionId, projectId, reviewDue }: { decisionId: string; projectId: number; reviewDue: boolean }) {
+export function DeepReviewPanel({
+  decisionId,
+  projectId,
+  mode,
+}: {
+  decisionId: string;
+  projectId: number;
+  /** null = 실행할 수 없는 Decision (대체됨 / 승인 대기). 기존 결과는 계속 보여준다 */
+  mode: DeepReviewMode | null;
+}) {
   const [enabled, setEnabled] = useState<boolean | null>(null);
   const [runs, setRuns] = useState<DeepReviewRun[] | null>(null);
   const [selectedId, setSelectedId] = useState<number | null>(null);
@@ -108,11 +140,12 @@ export function DeepReviewPanel({ decisionId, projectId, reviewDue }: { decision
   }
 
   if (runs === null && !error) return <div className="mb-14 h-20 animate-pulse rounded-xl bg-soft" />;
-  if ((runs?.length ?? 0) === 0 && (!reviewDue || enabled === false)) return null;
+  if ((runs?.length ?? 0) === 0 && (mode === null || enabled === false)) return null;
 
   const selected = runs?.find((r) => r.id === selectedId) ?? runs?.[0] ?? null;
   const busy = requesting || active !== null;
-  const canRun = reviewDue && enabled === true;
+  const canRun = mode !== null && enabled === true;
+  const triggered = mode === "REVIEW_DUE";
 
   return (
     <Card id="deep-review" className="mb-14 scroll-mt-32">
@@ -127,7 +160,7 @@ export function DeepReviewPanel({ decisionId, projectId, reviewDue }: { decision
         description="Multi-agent · Evidence Researcher → Decision Analyst → Review Critic (Paperclip). 단계마다 schema 검증 · 교차 검증 후 사람에게 전달합니다. 결정을 바꾸지 않습니다."
         action={
           canRun && (
-            <Button size="sm" variant={selected ? "secondary" : "primary"} disabled={busy} onClick={run} className="sm:shrink-0">
+            <Button size="sm" variant={triggered && !selected ? "primary" : "secondary"} disabled={busy} onClick={run} className="sm:shrink-0">
               {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Network className="size-3.5" />}
               {active ? "Running…" : selected ? "Run again" : "Run Deep Review"}
             </Button>
@@ -136,6 +169,12 @@ export function DeepReviewPanel({ decisionId, projectId, reviewDue }: { decision
       />
       <div className="space-y-5 p-5 sm:p-6">
         {error && <p className="rounded-lg bg-danger-soft p-3 text-sm text-danger">{error}</p>}
+        {canRun && !active && (
+          <p className={cn("text-sm", triggered ? "border-l-2 border-ink pl-3 font-medium text-ink" : "text-muted")}>
+            {MODE_TEXT[mode]}
+            {!triggered && <span className="block text-xs text-faint">수동 실행은 review 상태를 REVIEW_DUE로 바꾸지 않고 알림도 보내지 않습니다.</span>}
+          </p>
+        )}
         {!selected && (
           <p className="text-sm text-muted">
             아직 Deep Review가 없습니다. Run Deep Review를 누르면 세 역할이 순서대로 검토합니다 (보통 1분 이내).
@@ -156,7 +195,8 @@ export function DeepReviewPanel({ decisionId, projectId, reviewDue }: { decision
                       r.id === selected?.id ? "border-ink bg-ink text-white" : "border-line text-ink-2 hover:border-ink",
                     )}
                   >
-                    #{r.id} · {STATUS_TEXT[r.status]} · {time(r.completed_at ?? r.created_at)}
+                    #{r.id} · {STATUS_TEXT[r.status]} · {r.review_reason === "MANUAL" ? "Manual" : "Triggered"} ·{" "}
+                    {time(r.completed_at ?? r.created_at)}
                   </button>
                 </li>
               ))}
@@ -199,6 +239,7 @@ function RunView({ run }: { run: DeepReviewRun }) {
       <div className="flex flex-wrap gap-x-4 gap-y-1 rounded-lg bg-soft px-3 py-2 text-xs text-ink-2">
         <span>run #{run.id}</span>
         <span>{STATUS_TEXT[run.status]}</span>
+        <span className="text-muted">{REASON_TEXT[run.review_reason ?? "TRIGGERED"]}</span>
         <span>시작 {time(run.created_at)}</span>
         {run.completed_at && <span>종료 {time(run.completed_at)}</span>}
         {run.paperclip.parent_identifier && <span>Paperclip {run.paperclip.parent_identifier}</span>}
@@ -331,6 +372,8 @@ function ResearchView({ research, meta }: { research: DeepReviewResearch; meta: 
   const f = research.authoritative_facts;
   const assumptions = (f.assumptions as string[] | undefined) ?? [];
   const observed = research.observed_state.observed as { metric?: string; value?: number; unit?: string; observed_at?: string } | undefined;
+  const current = research.observed_state.current_value as { available?: boolean; reason?: string | null } | undefined;
+  const missing = current && current.available === false ? (CURRENT_VALUE_TEXT[current.reason ?? ""] ?? "현재 관측값 없음") : null;
   return (
     <div className="space-y-6">
       <Block title="Authoritative Evidence" kind="fact">
@@ -339,8 +382,12 @@ function ResearchView({ research, meta }: { research: DeepReviewResearch; meta: 
           <Fact label="Rationale" value={factText(f.rationale)} wide />
           <Fact label="Assumptions" value={assumptions.length ? assumptions.map((a, i) => `[${i}] ${a}`).join("\n") : "명시적으로 기록된 전제 없음"} wide />
           <Fact label="Trigger" value={factText(f.trigger)} />
-          <Fact label="Observed" value={observed ? `${observed.metric} = ${observed.value} ${observed.unit ?? ""} · ${observed.observed_at ?? ""}` : "-"} />
+          <Fact
+            label="Observed"
+            value={missing ?? (observed ? `${observed.metric} = ${observed.value} ${observed.unit ?? ""} · ${observed.observed_at ?? ""}` : "-")}
+          />
           <Fact label="Raw condition" value={factText(f.raw_condition)} wide />
+          {typeof f.review_reason_note === "string" && <Fact label="Review reason" value={f.review_reason_note} wide />}
           <Fact label="Detection" value={factText(f.detection)} wide />
         </dl>
         <div className="pt-2">

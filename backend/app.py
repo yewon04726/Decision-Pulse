@@ -48,6 +48,7 @@ from services.knowledge_sync import sync_after_approve
 from services import audio_ingest, gbrain_sync, source_title
 from services import metrics as metric_service
 from services import deep_review, review_memo, review_monitor
+from services.metric_adapters import resolve_metrics
 from services.review import to_view, trigger_metric_names
 
 
@@ -159,7 +160,7 @@ async def get_metric(metric_name: str, project_id: int = Query(...)):
 async def list_decisions(project_id: int = Query(...)):
     project = _project(project_id)
     decisions = db.list_decisions(project.id)
-    found, errors = await metric_service.check_metrics(project, trigger_metric_names(decisions))
+    found, errors = await resolve_metrics(project, trigger_metric_names(decisions))
     return [to_view(d, found, errors) for d in decisions]
 
 
@@ -169,7 +170,7 @@ async def get_decision(decision_id: str):
     if decision is None:
         raise HTTPException(404, f"Decision not found: {decision_id}")
     project = _project(decision.project_id)
-    found, errors = await metric_service.check_metrics(project, trigger_metric_names([decision]))
+    found, errors = await resolve_metrics(project, trigger_metric_names([decision]))
     return to_view(decision, found, errors)
 
 

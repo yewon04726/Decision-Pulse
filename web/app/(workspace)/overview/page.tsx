@@ -10,9 +10,9 @@ import { StatusBadge, TopicTag } from "@/components/decision/status-badge";
 import { TriggerGauge } from "@/components/decision/trigger-gauge";
 import { getCandidates, getDecisions, getMetrics, getReviewMemos, getSources } from "@/lib/api";
 import { getCurrentProject } from "@/lib/project";
-import { formatMetricValue, formatReviewTrigger, metricKey, METRIC_LABELS } from "@/lib/metrics";
+import { formatMetricValue, formatReviewTrigger, METRIC_LABELS, reviewBucket, type ReviewBucket } from "@/lib/metrics";
 import { cn } from "@/lib/utils";
-import type { DecisionView, ReviewMemo, ReviewTrigger } from "@/lib/types";
+import type { DecisionView, ReviewMemo } from "@/lib/types";
 
 // 프로젝트 Workspace 첫 화면. 우선순위: 1 Review Due → 2 Candidate → 3 Review Memo → 4 Decision 상태 → 5 Knowledge/Integration
 export default function OverviewPage() {
@@ -46,10 +46,11 @@ async function OverviewContent() {
 
   const live = decisions.filter((d) => d.display_status !== "SUPERSEDED");
   const reviewDue = decisions.filter((d) => d.display_status === "REVIEW_DUE");
-  // 자동 판정 = 등록된 지표의 단일 metric 조건. 그 외 조건(manual, event, compound, 매핑 안 된 metric 등)은 사람이 확인
-  const autoChecked = (t: ReviewTrigger | null) => t?.type === "metric" && metricKey(t) !== null;
-  const monitored = live.filter((d) => autoChecked(d.review_trigger) && d.display_status !== "REVIEW_DUE");
-  const manual = live.filter((d) => d.review_trigger && !autoChecked(d.review_trigger));
+  // 자동 판정 = CONNECTED(데이터 소스가 연결된 지표 조건). NEEDS_MAPPING(데이터 연결 필요)과 MANUAL(사람 확인)은 따로 보여 준다
+  const mapping = (d: DecisionView) => d.trigger_status?.mapping_status ?? null;
+  const monitored = live.filter((d) => mapping(d) === "CONNECTED" && d.display_status !== "REVIEW_DUE");
+  const needsMapping = live.filter((d) => mapping(d) === "NEEDS_MAPPING");
+  const manual = live.filter((d) => mapping(d) === "MANUAL");
 
   // 최근 Review Memo: 재검토 대상 결정별 최신 메모 (읽기 전용 조회)
   const memoLists = await Promise.all(reviewDue.map((d) => getReviewMemos(d.id).catch(() => [] as ReviewMemo[])));
@@ -58,7 +59,7 @@ async function OverviewContent() {
     .filter((m): m is { decision: DecisionView; memo: ReviewMemo } => m.memo !== undefined)
     .sort((a, b) => (b.memo.created_at > a.memo.created_at ? 1 : -1));
 
-  const count = (s: DecisionView["display_status"]) => decisions.filter((d) => d.display_status === s).length;
+  const count = (s: ReviewBucket) => decisions.filter((d) => reviewBucket(d) === s).length;
   const stats = [
     { label: "Active", value: count("ACTIVE"), href: "/decisions?status=ACTIVE" },
     { label: "Review due", value: reviewDue.length, href: "/decisions?status=REVIEW_DUE", accent: reviewDue.length > 0 },
@@ -245,9 +246,28 @@ async function OverviewContent() {
               </ul>
             )}
           </div>
-          <div>
-            <h3 className="eyebrow">Checked by people · {manual.length}</h3>
-            <p className="mt-1 text-xs text-faint">check_metric에 해당 지표가 없어 자동 판정하지 않습니다</p>
+          <div className="space-y-10">
+            {needsMapping.length > 0 && (
+              <div>
+                <h3 className="eyebrow">Needs mapping · {needsMapping.length}</h3>
+                <p className="mt-1 text-xs text-faint">측정 가능한 조건이지만 연결된 데이터 소스가 없어 자동 평가를 보류합니다</p>
+                <ul className="mt-3 divide-y divide-line">
+                  {needsMapping.map((d) => (
+                    <li key={d.id}>
+                      <Link href={`/decisions/${d.id}`} className="group block py-3.5">
+                        <span className="block truncate text-sm font-medium text-ink group-hover:underline group-hover:underline-offset-4">
+                          {d.title}
+                        </span>
+                        <span className="mt-1 block font-mono text-xs text-muted">{formatReviewTrigger(d.review_trigger)}</span>
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            <div>
+            <h3 className="eyebrow">Manual review · {manual.length}</h3>
+            <p className="mt-1 text-xs text-faint">자동 측정이 어려운 조건이라 사람이 직접 확인합니다</p>
             <ul className="mt-3 divide-y divide-line">
               {manual.map((d) => (
                 <li key={d.id}>
@@ -262,6 +282,7 @@ async function OverviewContent() {
                 </li>
               ))}
             </ul>
+            </div>
           </div>
         </div>
       </Section>

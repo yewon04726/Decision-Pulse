@@ -2,12 +2,14 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, StrictFloat, StrictInt, model_validator
 
+import metric_registry
 from config import KNOWN_METRICS
 
 # Review Trigger 비교 연산자 (V2에서 ==, != 추가)
 Operator = Literal[">", ">=", "<", "<=", "==", "!="]
 DecisionLifecycle = Literal["active", "pending_review", "superseded"]
-# UNKNOWN: 재검토 조건은 있지만 metric을 확인할 수 없어 판정 불가 (서버 꺼짐 / 프로젝트에 metric 미연결)
+# UNKNOWN: 자동 평가 대상(CONNECTED)인데 지금 값을 읽지 못해 판정 불가 (서버 꺼짐 / source 오류).
+#          '지표 연결 안 됨'(NEEDS_MAPPING)이나 '사람 확인 조건'(MANUAL)은 UNKNOWN이 아니다 → TriggerStatus.mapping_status
 DisplayStatus = Literal["ACTIVE", "REVIEW_DUE", "PENDING_REVIEW", "SUPERSEDED", "UNKNOWN"]
 SourceType = Literal["meeting", "issue", "adr", "pr", "audio_transcript"]
 TranscriptionStatus = Literal["uploaded", "transcribing", "ready", "failed"]
@@ -65,7 +67,10 @@ class MetricTrigger(BaseModel):
 
     type: Literal["metric"] = "metric"
     raw_metric: str | None = None  # 원문의 지표 표현 (예: "가입자 수", "일주일 프로덕션 배포 횟수")
-    metric_key: str | None = None  # 등록된 지표 키. 모르면 None
+    metric_key: str | None = None  # 자동 평가 가능한(resolver 연결된) 지표 키. 아니면 None
+    # Canonical Metric Registry의 지표 이름 (연결 여부와 무관). 예: deployment_count. registry에 없으면 None
+    canonical_metric: str | None = None
+    window: str | None = None  # 집계 기간 (예: 7d = "일주일에 5회"). 원문에서만 읽는다
     operator: Operator
     threshold: int | float
     unit: str | None = None
@@ -79,15 +84,24 @@ class MetricTrigger(BaseModel):
     @model_validator(mode="after")
     def _normalize(self):
         key = self.metric_key or self.metric
+        canonical = self.canonical_metric if metric_registry.get(self.canonical_metric) else None
+        if key and metric_registry.get(key):
+            canonical = canonical or key
+        canonical = canonical or metric_registry.canonicalize(self.raw_metric, self.unit)
         if key and key not in KNOWN_METRICS:
             # 모르는 지표 키는 버리지 않고 원문 지표 표현으로 남긴 뒤 매핑 필요로 표시한다
             self.raw_metric = self.raw_metric or key
             key = None
+        # canonical 지표에 resolver가 연결되어 있으면 자동 평가 대상 (registry에 resolver를 붙이면 저장된 결정도 자동으로 연결됨)
+        if key is None and canonical in KNOWN_METRICS:
+            key = canonical
+        self.canonical_metric = canonical
         self.metric_key = key
         self.metric = key
         self.needs_mapping = key is None
         self.raw_condition = self.raw_condition or self.description
         self.description = self.description or self.raw_condition
+        self.window = self.window or metric_registry.infer_window(self.raw_metric, self.raw_condition)
         return self
 
 
@@ -230,6 +244,29 @@ class TriggerEvaluation(BaseModel):
     reason: Literal["unavailable", "not_connected", "not_found"] | None = None
 
 
+MappingStatus = Literal["CONNECTED", "NEEDS_MAPPING", "MANUAL"]
+
+
+class TriggerStatus(BaseModel):
+    """재검토 조건의 자동화 상태 (저장하지 않고 registry + 프로젝트 연결 상태로 계산)
+
+    mapping_status
+      CONNECTED     : resolver(data source)가 연결되어 자동 평가한다
+      NEEDS_MAPPING : 측정 가능한 지표지만 Decision Pulse에 data source가 아직 연결되지 않음 → 자동 평가 보류
+      MANUAL        : 객관적인 자동 측정값으로 표현하기 어려움 → 사람이 확인
+    evaluation_status (CONNECTED일 때만): ACTIVE | REVIEW_DUE | UNKNOWN(값을 읽지 못함)
+    """
+
+    mapping_status: MappingStatus
+    evaluation_status: Literal["ACTIVE", "REVIEW_DUE", "UNKNOWN"] | None = None
+    canonical_metric: str | None = None
+    metric_label: str | None = None
+    resolver: str | None = None  # data source adapter 이름 (CONNECTED일 때)
+    data_source: str | None = None  # 예: sqlite:users (관측값의 source가 있으면 그 값)
+    window: str | None = None
+    reason: str  # 사람이 읽는 설명
+
+
 class Decision(BaseModel):
     id: str
     project_id: int
@@ -255,6 +292,7 @@ class DecisionView(Decision):
 
     display_status: DisplayStatus
     evaluation: TriggerEvaluation | None
+    trigger_status: TriggerStatus | None = None  # 조건이 없으면 None
 
 
 class MetricsResponse(BaseModel):
@@ -610,7 +648,7 @@ class ResearchFindings(_Strict):
     """Researcher(Hermes)가 직접 쓰는 부분: evidence 선택 + 관련 과거 Decision + unknowns.
     worker가 backend snapshot(authoritative_facts / observed_state / evidence 원문)과 합쳐 DeepReviewResearch를 만든다."""
     decision_id: Annotated[str, Field(pattern=DEEP_REVIEW_DECISION_ID)]
-    confirmed_review_due: bool
+    confirmed_review_due: bool  # list_review_due에 대상이 있는가. backend 실행 사유(TRIGGERED=true, MANUAL=false)와 같아야 한다
     evidence: list[ResearchFindingEvidence]
     related_decisions: list[RelatedDecision]
     unknowns: list[DeepReviewText]
@@ -706,6 +744,8 @@ class DeepReviewRun(BaseModel):
     decision_id: str
     review_event_id: int | None
     review_state_changed_at: str | None
+    # 실행 사유: TRIGGERED = 시작 시점 REVIEW_DUE / MANUAL = 그 외 상태에서 사람이 실행 (Deep Review 실행 ≠ REVIEW_DUE)
+    review_reason: Literal["TRIGGERED", "MANUAL"] = "TRIGGERED"
     status: DeepReviewStatus
     revision_count: int
     final_verdict: Literal["PASS", "HUMAN_REVIEW_REQUIRED"] | None

@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { cn } from "@/lib/utils";
 import type { DecisionView } from "@/lib/types";
-import { StatusBadge, TopicTag } from "./status-badge";
+import { ReviewStateBadge, TopicTag } from "./status-badge";
 import { ReviewTriggerView } from "./trigger-gauge";
 
 /** Decisions 목록의 한 줄: 제목/결정 · 이유 · 재검토 조건 */
@@ -17,7 +17,7 @@ export function DecisionRow({ decision }: { decision: DecisionView }) {
     >
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-          <StatusBadge status={status} />
+          <ReviewStateBadge decision={decision} />
           <TopicTag topic={decision.topic} />
         </div>
         {/* 두 줄까지 그대로, 넘칠 때만 … (전체 제목은 hover) */}
@@ -37,7 +37,7 @@ export function DecisionRow({ decision }: { decision: DecisionView }) {
         <div className="eyebrow text-[10px]">Review trigger</div>
         <div className="mt-1.5">
           {decision.review_trigger ? (
-            <ReviewTriggerView trigger={decision.review_trigger} evaluation={evaluation} size="sm" />
+            <ReviewTriggerView trigger={decision.review_trigger} evaluation={evaluation} status={decision.trigger_status} size="sm" />
           ) : (
             <span className="text-sm text-faint">없음 (영구 결정)</span>
           )}
