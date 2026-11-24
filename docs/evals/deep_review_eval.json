@@ -1,0 +1,171 @@
+{
+  "generated_at": "2026-11-25T00:18:07",
+  "method": "Single-Agent Review Memo vs Multi-Agent Deep Review 비교 (작은 평가 harness).",
+  "metrics": [
+    "evidence_reference_coverage",
+    "unsupported_claim_count",
+    "missing_info_items",
+    "latency_seconds",
+    "cost_usd"
+  ],
+  "deep_review_runs_by_status": [
+    {
+      "status": "COMPLETED",
+      "count": 2
+    },
+    {
+      "status": "FAILED",
+      "count": 3
+    }
+  ],
+  "cases": [
+    {
+      "decision_id": "DEC-2026-0314-DB",
+      "single": {
+        "kind": "single_agent_review_memo",
+        "id": 6,
+        "prompt_version": "v4",
+        "model": "z-ai/glm-5.3",
+        "evidence_total": 3,
+        "evidence_cited": 3,
+        "evidence_reference_coverage": 1.0,
+        "unsupported_claim_count": null,
+        "unsupported_claim_note": "검증 단계 없음 (자동 측정 불가)",
+        "missing_info_items": 7,
+        "latency_seconds": 27.7,
+        "cost_usd": null,
+        "llm_calls": "1 Hermes session",
+        "tools_used": [
+          "tool_describe",
+          "mcp__decision_debt__list_review_due",
+          "mcp__decision_debt__get_decision_detail",
+          "mcp__gbrain__search",
+          "mcp__gbrain__query"
+        ]
+      },
+      "multi": {
+        "kind": "multi_agent_deep_review",
+        "id": 5,
+        "status": "COMPLETED",
+        "final_verdict": "PASS",
+        "revision_count": 0,
+        "paperclip_parent": "DEC-11",
+        "evidence_total": 3,
+        "evidence_cited": 3,
+        "evidence_reference_coverage": 1.0,
+        "fact_refs_used": [
+          "FACT:assumptions[0]",
+          "FACT:detection",
+          "FACT:observed",
+          "FACT:rationale",
+          "FACT:review_state",
+          "FACT:trigger"
+        ],
+        "related_decisions": [
+          "DEC-2026-1106-DATABASE",
+          "DEC-2026-1113-DATABASE"
+        ],
+        "unsupported_claim_count": 0,
+        "critic_missing_checks": 2,
+        "missing_info_items": 10,
+        "known_changes": 3,
+        "implications": 4,
+        "latency_seconds": 27.0,
+        "cost_usd": 0.008575,
+        "llm_calls": 3
+      },
+      "human_rubric": {
+        "single": {
+          "factual_accuracy_1to5": null,
+          "fact_vs_inference_separation_1to5": null,
+          "actionability_of_checks_1to5": null,
+          "overstatement_found": null,
+          "notes": ""
+        },
+        "multi": {
+          "factual_accuracy_1to5": null,
+          "fact_vs_inference_separation_1to5": null,
+          "actionability_of_checks_1to5": null,
+          "overstatement_found": null,
+          "notes": ""
+        }
+      }
+    },
+    {
+      "decision_id": "DEC-2026-1106-DATABASE",
+      "single": {
+        "kind": "single_agent_review_memo",
+        "id": 5,
+        "prompt_version": "v4",
+        "model": "z-ai/glm-5.3",
+        "evidence_total": 6,
+        "evidence_cited": 4,
+        "evidence_reference_coverage": 0.67,
+        "unsupported_claim_count": null,
+        "unsupported_claim_note": "검증 단계 없음 (자동 측정 불가)",
+        "missing_info_items": 3,
+        "latency_seconds": 23.7,
+        "cost_usd": null,
+        "llm_calls": "1 Hermes session",
+        "tools_used": [
+          "mcp__decision_debt__list_review_due",
+          "mcp__decision_debt__get_decision_detail",
+          "tool_call",
+          "mcp__gbrain__search"
+        ]
+      },
+      "multi": {
+        "kind": "multi_agent_deep_review",
+        "id": 4,
+        "status": "COMPLETED",
+        "final_verdict": "PASS",
+        "revision_count": 0,
+        "paperclip_parent": "DEC-7",
+        "evidence_total": 6,
+        "evidence_cited": 6,
+        "evidence_reference_coverage": 1.0,
+        "fact_refs_used": [
+          "FACT:detection",
+          "FACT:observed",
+          "FACT:rationale",
+          "FACT:review_state",
+          "FACT:trigger"
+        ],
+        "related_decisions": [
+          "DEC-2026-1113-DATABASE",
+          "DEC-2026-1106-SEARCH",
+          "DEC-2026-1021-DEPLOY"
+        ],
+        "unsupported_claim_count": 0,
+        "critic_missing_checks": 2,
+        "missing_info_items": 16,
+        "known_changes": 4,
+        "implications": 4,
+        "latency_seconds": 35.0,
+        "cost_usd": 0.012767,
+        "llm_calls": 3
+      },
+      "human_rubric": {
+        "single": {
+          "factual_accuracy_1to5": null,
+          "fact_vs_inference_separation_1to5": null,
+          "actionability_of_checks_1to5": null,
+          "overstatement_found": null,
+          "notes": ""
+        },
+        "multi": {
+          "factual_accuracy_1to5": null,
+          "fact_vs_inference_separation_1to5": null,
+          "actionability_of_checks_1to5": null,
+          "overstatement_found": null,
+          "notes": ""
+        }
+      }
+    }
+  ],
+  "notes": [
+    "Single memo의 비용은 저장하지 않아 null. Deep Review 비용은 OpenRouter usage.cost(Analyst/Critic) + Hermes estimated_cost_usd(Researcher).",
+    "Single memo에는 검증 단계가 없으므로 unsupported claim을 자동으로 세지 않는다 (human rubric).",
+    "같은 결정이라도 실행 시점이 달라 관측값/관련 결정 목록이 다를 수 있다."
+  ]
+}

@@ -18,7 +18,7 @@ else
 fi
 
 stop_pidfile() {
-  local file="$1" name pid started pattern cmd now_started i
+  local file="$1" wait_sec="${2:-10}" name pid started pattern cmd now_started i
   name="$(basename "$file" .pid)"
   pid="$(cut -f1 "$file")"
   started="$(cut -f2 "$file")"
@@ -47,7 +47,7 @@ stop_pidfile() {
 
   # dev.sh가 별도 프로세스 그룹으로 띄웠으므로 그룹 전체(자식 포함)에 TERM
   kill -TERM -- "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null
-  for i in 1 2 3 4 5 6 7 8 9 10; do
+  for i in $(seq 1 "$wait_sec"); do
     kill -0 "$pid" 2>/dev/null || break
     sleep 1
   done
@@ -63,10 +63,11 @@ stop_pidfile() {
 printf '%sDecision Debt MVP — dev 환경 종료%s\n' "$B" "$N"
 
 found=0
-for name in web backend check-metric llama-swap dify-logs; do
+for name in web backend paperclip check-metric llama-swap dify-logs; do
   if [ -f "$RUN_DIR/$name.pid" ]; then
     found=1
-    stop_pidfile "$RUN_DIR/$name.pid"
+    # Paperclip은 embedded PostgreSQL을 정상 종료할 시간을 더 준다
+    if [ "$name" = paperclip ]; then stop_pidfile "$RUN_DIR/$name.pid" 30; else stop_pidfile "$RUN_DIR/$name.pid"; fi
   fi
 done
 
@@ -85,7 +86,7 @@ fi
 [ "$found" -eq 0 ] && printf '  이 프로젝트가 시작한 프로세스가 없습니다.\n'
 
 still=""
-for port in 3000 8001 8000 8080; do
+for port in 3000 8001 3110 8000 8080; do
   lsof -nP -iTCP:"$port" -sTCP:LISTEN -t >/dev/null 2>&1 && still="$still :$port"
 done
 [ -n "$still" ] && printf '  (dev.sh 이전부터 실행 중이던 서비스는 유지됨:%s)\n' "$still"

@@ -439,3 +439,96 @@ export interface DemoChange {
   source: string | null;
   observed_at: string | null;
 }
+
+// ---------------------------------------------------------------- Deep Review (Paperclip multi-agent, advisory)
+
+export type DeepReviewStatus =
+  | "PENDING"
+  | "RESEARCHING"
+  | "ANALYZING"
+  | "CRITIQUING"
+  | "REVISING"
+  | "COMPLETED"
+  | "HUMAN_REVIEW_REQUIRED"
+  | "FAILED";
+
+export interface DeepReviewEvidence {
+  ref: string;
+  source_id: string;
+  source_title: string | null;
+  /** backend snapshot 원문 그대로 */
+  text: string;
+  relevance: string;
+}
+
+export interface DeepReviewResearch {
+  decision_id: string;
+  authoritative_facts: Record<string, unknown>;
+  observed_state: Record<string, unknown>;
+  evidence: DeepReviewEvidence[];
+  related_decisions: { decision_id: string; ref: string; relation: "direct" | "indirect"; summary: string }[];
+  unknowns: string[];
+}
+
+export interface DeepReviewAnalysis {
+  decision_id: string;
+  known_changes: { statement: string; evidence_refs: string[] }[];
+  implications: { statement: string; evidence_refs: string[]; confidence: "low" | "medium" | "high" }[];
+  unknowns: string[];
+  recommended_checks: { check: string; reason: string }[];
+  evidence_refs: string[];
+}
+
+export interface DeepReviewCritique {
+  decision_id: string;
+  verdict: "PASS" | "REVISE";
+  unsupported_claims: { claim: string; reason: string }[];
+  contradictions: { claim: string; reason: string; evidence_ref: string }[];
+  missing_checks: string[];
+  revision_instructions: string[];
+}
+
+export interface DeepReviewArtifact {
+  id: number;
+  run_id: number;
+  role: "researcher" | "analyst" | "critic";
+  iteration: number;
+  payload: DeepReviewResearch | DeepReviewAnalysis | DeepReviewCritique;
+  paperclip_issue_id: string | null;
+  paperclip_issue_identifier: string | null;
+  paperclip_run_id: string | null;
+  meta: {
+    model?: string | null;
+    runtime?: string;
+    cost_usd?: number | null;
+    elapsed_seconds?: number;
+    tool_audit?: { ok: boolean; tools_used: string[]; disallowed: string[] };
+  } | null;
+  created_at: string;
+}
+
+export interface DeepReviewStage {
+  key: "research" | "analysis" | "critique";
+  label: string;
+  state: "waiting" | "running" | "complete" | "failed";
+  iteration: number;
+}
+
+export interface DeepReviewRun {
+  id: number;
+  project_id: number;
+  decision_id: string;
+  status: DeepReviewStatus;
+  revision_count: number;
+  final_verdict: "PASS" | "HUMAN_REVIEW_REQUIRED" | null;
+  error: string | null;
+  paperclip: { parent_identifier?: string; stages?: { identifier: string; role: string; iteration: number }[] };
+  /** 개발용 링크 (PAPERCLIP_UI_URL이 설정된 경우만) */
+  paperclip_url: string | null;
+  input_snapshot: { authoritative_facts?: Record<string, unknown>; observed_state?: Record<string, unknown> } | null;
+  stages: DeepReviewStage[];
+  artifacts: DeepReviewArtifact[];
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+}

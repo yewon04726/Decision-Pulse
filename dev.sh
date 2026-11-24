@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Decision Debt MVP 개발 환경 전체 실행.
 #   1) Dify (docker compose up -d)   2) llama-swap   3) 기존 check_metric
-#   4) backend (FastAPI)             5) web (Next.js)
+#   4) Paperclip (Deep Review control plane, 127.0.0.1:3110)
+#   5) backend (FastAPI)             6) web (Next.js)       7) Hermes gateway
 #
 # - 이미 실행 중인 서비스(포트 LISTEN 중)는 건드리지 않고 건너뛴다.
 # - 이 스크립트가 시작한 프로세스만 .run/<name>.pid 에 기록한다 → ./stop.sh 가 이것만 종료한다.
@@ -21,6 +22,7 @@ LLAMA_SWAP_CONFIG="$HOME/llama-swap/config.yaml"
 TOOL_DIR="$HOME/decision-debt-tool"
 BACKEND_DIR="$ROOT/backend"
 WEB_DIR="$ROOT/web"
+PAPERCLIP_DIR="$ROOT/paperclip"   # 이 프로젝트 전용 Paperclip instance (data: paperclip/data, launchd 서비스 설치 안 함)
 
 if [ -t 1 ]; then
   G=$'\033[32m'; Y=$'\033[33m'; R=$'\033[31m'; B=$'\033[1m'; N=$'\033[0m'
@@ -132,18 +134,30 @@ wait_http() {
 # ------------------------------------------------------------------ main
 info "${B}Decision Debt MVP — dev 환경 시작${N}"
 info ""
-info "${B}[1/6] Dify${N}"
+info "${B}[1/7] Dify${N}"
 start_dify
 
-info "${B}[2/6] llama-swap${N}"
+info "${B}[2/7] llama-swap${N}"
 start_bg llama-swap 8080 "$HOME" "llama-swap --config" \
   llama-swap --config "$LLAMA_SWAP_CONFIG" --listen 0.0.0.0:8080
 
-info "${B}[3/6] check_metric (기존 ~/decision-debt-tool)${N}"
+info "${B}[3/7] check_metric (기존 ~/decision-debt-tool)${N}"
 start_bg check-metric 8000 "$TOOL_DIR" "uvicorn app:app --host 0.0.0.0 --port 8000" \
   "$TOOL_DIR/.venv/bin/uvicorn" app:app --host 0.0.0.0 --port 8000
 
-info "${B}[4/6] backend${N}"
+info "${B}[4/7] Paperclip (Deep Review)${N}"
+# foreground 'paperclipai run'을 dev.sh 프로세스 그룹으로 띄운다 → stop.sh가 함께 종료 (embedded PostgreSQL 포함).
+# 'paperclipai service install'(launchd)은 쓰지 않는다. bind는 config의 loopback(127.0.0.1)
+if [ ! -x "$PAPERCLIP_DIR/node_modules/.bin/paperclipai" ]; then
+  skip "Paperclip: 설치 안 됨 → cd paperclip && npm install (Deep Review만 비활성, 다른 기능은 영향 없음)"
+elif [ ! -f "$PAPERCLIP_DIR/data/instances/default/config.json" ]; then
+  skip "Paperclip: instance 없음 → README의 Deep Review 설정 참고 (Deep Review만 비활성)"
+else
+  start_bg paperclip 3110 "$PAPERCLIP_DIR" "paperclipai run" \
+    env PAPERCLIP_TELEMETRY_DISABLED=1 "$PAPERCLIP_DIR/node_modules/.bin/paperclipai" run -d "$PAPERCLIP_DIR/data"
+fi
+
+info "${B}[5/7] backend${N}"
 if [ ! -x "$BACKEND_DIR/.venv/bin/uvicorn" ]; then
   fail "backend: .venv 없음 → cd backend && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt"
 else
@@ -151,14 +165,14 @@ else
     "$BACKEND_DIR/.venv/bin/uvicorn" app:app --host 127.0.0.1 --port 8001
 fi
 
-info "${B}[5/6] web${N}"
+info "${B}[6/7] web${N}"
 if [ ! -d "$WEB_DIR/node_modules" ]; then
   fail "web: node_modules 없음 → cd web && npm install"
 else
   start_bg web 3000 "$WEB_DIR" "npm run dev" npm run dev
 fi
 
-info "${B}[6/6] Hermes gateway${N}"
+info "${B}[7/7] Hermes gateway${N}"
 if hermes gateway start >>"$LOG_DIR/hermes.log" 2>&1; then
   if hermes gateway ensure --json --timeout 60 >>"$LOG_DIR/hermes.log" 2>&1; then
     ok "Hermes gateway: ready → gbrain MCP 포함"
@@ -177,6 +191,9 @@ failed=0
 wait_http "Dify"         80   "http://localhost/"                         120 '^[23]' || failed=1
 wait_http "llama-swap"   8080 "http://localhost:8080/v1/models"            30      || failed=1
 wait_http "check_metric" 8000 "http://localhost:8000/metrics/user_count"   30      || failed=1
+if [ -f "$PAPERCLIP_DIR/data/instances/default/config.json" ]; then
+  wait_http "paperclip"  3110 "http://127.0.0.1:3110/api/health"           90      || failed=1
+fi
 wait_http "backend"      8001 "http://127.0.0.1:8001/api/health"           30      || failed=1
 wait_http "web"          3000 "http://localhost:3000/"                     90      || failed=1
 

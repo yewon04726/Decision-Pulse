@@ -1,0 +1,11 @@
+{
+  "name": "decision-pulse-paperclip",
+  "private": true,
+  "description": "Paperclip control plane for Decision Pulse Deep Review (project-local, no global install, no launchd service)",
+  "dependencies": {
+    "paperclipai": "2026.1117.0"
+  },
+  "allowScripts": {
+    "@embedded-postgres/darwin-arm64@18.1.0-beta.16": true
+  }
+}

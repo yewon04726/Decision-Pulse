@@ -16,6 +16,7 @@ import config
 import db
 from config import AGENT_SOURCES, EXTRACTION_MODE, KNOWN_METRICS, METRIC_SOURCES
 from schemas import (
+    DeepReviewRun,
     AgentChatRequest,
     AgentChatResponse,
     ApproveResponse,
@@ -46,7 +47,7 @@ from services import demo_state, dify, extraction
 from services.knowledge_sync import sync_after_approve
 from services import audio_ingest, gbrain_sync, source_title
 from services import metrics as metric_service
-from services import review_memo, review_monitor
+from services import deep_review, review_memo, review_monitor
 from services.review import to_view, trigger_metric_names
 
 
@@ -61,11 +62,14 @@ async def lifespan(_: FastAPI):
         print(f"[review_memo] 생성 중이던 Review Memo {stale_memos}건을 failed로 표시 (다시 생성 필요)")
     # 재검토 조건 주기 확인 (REVIEW_MONITOR_ENABLED=false로 끌 수 있음). 같은 프로세스 안의 asyncio task
     task = asyncio.create_task(review_monitor.run_forever()) if review_monitor.STATUS["enabled"] else None
+    # Deep Review 진행 확인 (Paperclip ticket → 검증 → 다음 ticket). 꺼져 있거나 Paperclip이 없어도 다른 기능에는 영향 없음
+    deep_task = asyncio.create_task(deep_review.run_forever()) if deep_review.ENABLED else None
     yield
-    if task:
-        task.cancel()
-        with suppress(asyncio.CancelledError):
-            await task
+    for t in (task, deep_task):
+        if t:
+            t.cancel()
+            with suppress(asyncio.CancelledError):
+                await t
 
 
 app = FastAPI(title="Decision Debt MVP API", version="0.2.0", lifespan=lifespan)
@@ -389,6 +393,42 @@ def list_review_memos(decision_id: str):
     if db.get_decision(decision_id) is None:
         raise HTTPException(404, f"Decision not found: {decision_id}")
     return db.list_review_memos(decision_id)
+
+
+# ---------------------------------------------------------------- Deep Review (Paperclip multi-agent, advisory)
+
+
+@app.get("/api/deep-review/status")
+def deep_review_status():
+    """화면에서 Run Deep Review 버튼 표시 여부. 꺼져 있으면 enabled=false (다른 기능과 무관)"""
+    return {"enabled": deep_review.ENABLED, "monitor": deep_review.STATUS}
+
+
+@app.post("/api/decisions/{decision_id}/deep-review", response_model=DeepReviewRun, status_code=202)
+async def create_deep_review(decision_id: str, background: BackgroundTasks, project_id: int | None = None):
+    """현재 REVIEW_DUE인 결정의 Deep Review를 시작한다 (Paperclip: Researcher → Analyst → Critic).
+    응답은 바로 202 + PENDING. 진행 중 run이 있으면 409. Decision은 바뀌지 않는다."""
+    try:
+        run = deep_review.start(decision_id, project_id)
+    except deep_review.DeepReviewError as e:
+        raise HTTPException(e.status, e.detail())
+    background.add_task(asyncio.to_thread, deep_review.kickoff, run["id"])
+    return deep_review.view(run)
+
+
+@app.get("/api/decisions/{decision_id}/deep-reviews", response_model=list[DeepReviewRun])
+def list_deep_reviews(decision_id: str):
+    if db.get_decision(decision_id) is None:
+        raise HTTPException(404, f"Decision not found: {decision_id}")
+    return [deep_review.view(r) for r in db.list_deep_review_runs(decision_id)]
+
+
+@app.get("/api/deep-reviews/{run_id}", response_model=DeepReviewRun)
+def get_deep_review(run_id: int):
+    run = db.get_deep_review_run(run_id)
+    if run is None:
+        raise HTTPException(404, f"Deep review not found: {run_id}")
+    return deep_review.view(run)
 
 
 @app.get("/api/review-memos/{memo_id}", response_model=ReviewMemo)

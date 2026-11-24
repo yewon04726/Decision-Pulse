@@ -180,3 +180,27 @@ DEMO_SCENARIOS: list[dict] = [
     {"id": "search-latency", "title": "Search latency trigger", "metric": "search_api_p95_ms", "value": 850},
     {"id": "infra-growth", "title": "Infrastructure growth trigger", "metric": "server_count", "value": 3},
 ]
+
+# ---- Deep Review (Paperclip multi-agent, advisory) ----
+# 기존 Review Memo(single agent)와 별개. 사용자가 Run Deep Review를 눌렀을 때만 시작한다 (REVIEW_DUE 자동 실행 없음).
+# Paperclip은 orchestration/control plane: 조직(3 agent) · ticket · checkout · 실행 · budget. Decision 원본은 SQLite.
+_TRUE = ("1", "true", "yes", "on")
+DEEP_REVIEW_ENABLED = os.environ.get("DEEP_REVIEW_ENABLED", "false").strip().lower() in _TRUE
+# Paperclip API (loopback만). 이 프로젝트 전용 instance: paperclip/ (dev.sh가 시작, stop.sh가 종료)
+PAPERCLIP_API_URL = os.environ.get("PAPERCLIP_API_URL", "http://127.0.0.1:3110/api").rstrip("/")
+# 개발용 "View orchestration details in Paperclip" 링크. 비우면 UI에서 링크를 숨긴다
+PAPERCLIP_UI_URL = os.environ.get("PAPERCLIP_UI_URL", "").strip().rstrip("/")
+# setup_paperclip_org.py가 만든 company / goal / project / agent id (비밀값 아님)
+DEEP_REVIEW_ORG_FILE = Path(os.environ.get("DEEP_REVIEW_ORG_FILE", BASE_DIR.parent / "paperclip" / "org.json")).expanduser()
+# Analyst / Critic LLM (tool 없는 chat completion). 비우면 OPENROUTER_MODEL
+DEEP_REVIEW_MODEL = os.environ.get("DEEP_REVIEW_MODEL", "").strip() or OPENROUTER_MODEL
+DEEP_REVIEW_LLM_TIMEOUT_SECONDS = float(os.environ.get("DEEP_REVIEW_LLM_TIMEOUT_SECONDS", "240"))
+# reasoning 모델의 생각 길이 (추출과 같은 설정을 기본으로). 비우면 provider 기본값
+DEEP_REVIEW_REASONING_EFFORT = os.environ.get("DEEP_REVIEW_REASONING_EFFORT", OPENROUTER_REASONING_EFFORT).strip()
+# OpenRouter provider 정렬 (latency | throughput | price). reasoning이 긴 provider에 걸리면 수 분이 걸린다
+DEEP_REVIEW_PROVIDER_SORT = os.environ.get("DEEP_REVIEW_PROVIDER_SORT", "throughput").strip()
+DEEP_REVIEW_RESEARCH_TIMEOUT_SECONDS = float(os.environ.get("DEEP_REVIEW_RESEARCH_TIMEOUT_SECONDS", "240"))  # Hermes
+# 단계(ticket) 하나가 끝나기를 기다리는 최대 시간 → 넘으면 FAILED
+DEEP_REVIEW_STAGE_TIMEOUT_SECONDS = float(os.environ.get("DEEP_REVIEW_STAGE_TIMEOUT_SECONDS", "420"))
+DEEP_REVIEW_POLL_SECONDS = float(os.environ.get("DEEP_REVIEW_POLL_SECONDS", "3"))
+DEEP_REVIEW_MAX_REVISIONS = 1  # Analyst ↔ Critic 수정 반복 상한 (고정)

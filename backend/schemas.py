@@ -561,3 +561,160 @@ class DemoChange(BaseModel):
     unit: str | None = None
     source: str | None = None
     observed_at: str | None = None
+
+
+# ---------------------------------------------------------------- Deep Review (Paperclip multi-agent, advisory)
+# 역할 3개의 handoff JSON contract. LLM 출력은 이 모델 검증을 통과해야만 저장/다음 단계로 넘어간다.
+# reference 형식 (실제로 식별 가능한 값만):
+#   E<n>                       Decision evidence 줄 (Review Memo와 같은 evidence_items snapshot ID)
+#   FACT:<key>                 backend가 저장값 그대로 만든 Authoritative Facts 항목 (예: FACT:assumptions[0], FACT:observed)
+#   DEC-<...>                  관련 과거 Decision ID (Decision Pulse DB에 실제로 있어야 함)
+
+DEEP_REVIEW_REF = r"^(E[1-9][0-9]*|FACT:[a-z_]+(\[[0-9]+\])?|DEC-[A-Z0-9][A-Z0-9-]*)$"
+DEEP_REVIEW_DECISION_ID = r"^DEC-[A-Z0-9][A-Z0-9-]*$"
+DeepReviewRef = Annotated[str, Field(pattern=DEEP_REVIEW_REF)]
+DeepReviewText = Annotated[str, Field(min_length=1, max_length=1200)]
+DeepReviewRole = Literal["researcher", "analyst", "critic"]
+DeepReviewStatus = Literal[
+    "PENDING", "RESEARCHING", "ANALYZING", "CRITIQUING", "REVISING", "COMPLETED", "HUMAN_REVIEW_REQUIRED", "FAILED"
+]
+DEEP_REVIEW_ACTIVE = ("PENDING", "RESEARCHING", "ANALYZING", "CRITIQUING", "REVISING")
+DeepReviewVerdict = Literal["PASS", "REVISE"]
+
+
+class _Strict(BaseModel):
+    model_config = {"extra": "forbid"}
+
+
+class ResearchEvidence(_Strict):
+    ref: Annotated[str, Field(pattern=r"^E[1-9][0-9]*$")]
+    source_id: str
+    source_title: str | None = None
+    text: str  # backend snapshot 원문 그대로 (LLM이 쓴 문장이 아님)
+    relevance: DeepReviewText
+
+
+class RelatedDecision(_Strict):
+    decision_id: Annotated[str, Field(pattern=DEEP_REVIEW_DECISION_ID)]
+    ref: Annotated[str, Field(min_length=1, max_length=300)]  # gbrain slug / page 등 조회한 위치
+    relation: Literal["direct", "indirect"]
+    summary: DeepReviewText
+
+
+class ResearchFindingEvidence(_Strict):
+    ref: Annotated[str, Field(pattern=r"^E[1-9][0-9]*$")]
+    relevance: DeepReviewText
+
+
+class ResearchFindings(_Strict):
+    """Researcher(Hermes)가 직접 쓰는 부분: evidence 선택 + 관련 과거 Decision + unknowns.
+    worker가 backend snapshot(authoritative_facts / observed_state / evidence 원문)과 합쳐 DeepReviewResearch를 만든다."""
+    decision_id: Annotated[str, Field(pattern=DEEP_REVIEW_DECISION_ID)]
+    confirmed_review_due: bool
+    evidence: list[ResearchFindingEvidence]
+    related_decisions: list[RelatedDecision]
+    unknowns: list[DeepReviewText]
+
+
+class DeepReviewResearch(_Strict):
+    """Evidence Researcher: 사실 수집만 (해석/판단 없음). authoritative_facts / observed_state는 backend snapshot."""
+    decision_id: Annotated[str, Field(pattern=DEEP_REVIEW_DECISION_ID)]
+    authoritative_facts: dict
+    observed_state: dict
+    evidence: list[ResearchEvidence]
+    related_decisions: list[RelatedDecision]
+    unknowns: list[DeepReviewText]
+
+
+class AnalysisClaim(_Strict):
+    statement: DeepReviewText
+    evidence_refs: Annotated[list[DeepReviewRef], Field(min_length=1)]
+
+
+class AnalysisImplication(AnalysisClaim):
+    confidence: Literal["low", "medium", "high"]
+
+
+class RecommendedCheck(_Strict):
+    check: DeepReviewText
+    reason: DeepReviewText
+
+
+class DeepReviewAnalysis(_Strict):
+    """Decision Analyst: Researcher JSON만 입력. known_changes(관측된 사실)와 implications(추론)를 분리한다."""
+    decision_id: Annotated[str, Field(pattern=DEEP_REVIEW_DECISION_ID)]
+    known_changes: list[AnalysisClaim]
+    implications: list[AnalysisImplication]
+    unknowns: list[DeepReviewText]
+    recommended_checks: list[RecommendedCheck]
+    evidence_refs: list[DeepReviewRef]
+
+
+class CritiqueFinding(_Strict):
+    claim: DeepReviewText
+    reason: DeepReviewText
+
+
+class CritiqueContradiction(CritiqueFinding):
+    evidence_ref: DeepReviewRef
+
+
+class DeepReviewCritique(_Strict):
+    """Review Critic: 교차 검증만 (새 분석/새 evidence 없음). verdict는 PASS | REVISE 두 값만."""
+    decision_id: Annotated[str, Field(pattern=DEEP_REVIEW_DECISION_ID)]
+    verdict: DeepReviewVerdict
+    unsupported_claims: list[CritiqueFinding]
+    contradictions: list[CritiqueContradiction]
+    missing_checks: list[DeepReviewText]
+    revision_instructions: list[DeepReviewText]
+
+    @model_validator(mode="after")
+    def _consistent(self):
+        if self.verdict == "REVISE" and not self.revision_instructions:
+            raise ValueError("verdict=REVISE이면 revision_instructions가 1개 이상 필요")
+        if self.verdict == "PASS" and (self.unsupported_claims or self.contradictions):
+            raise ValueError("unsupported_claims / contradictions가 있으면 verdict=PASS일 수 없음")
+        return self
+
+
+DEEP_REVIEW_OUTPUT_MODELS = {"researcher": DeepReviewResearch, "analyst": DeepReviewAnalysis, "critic": DeepReviewCritique}
+
+
+class DeepReviewArtifact(BaseModel):
+    id: int
+    run_id: int
+    role: DeepReviewRole
+    iteration: int  # analyst / critic: 0 = 첫 실행, 1 = Critic REVISE 후 한 번 더
+    payload: dict  # 검증을 통과한 JSON (위 모델)
+    paperclip_issue_id: str | None
+    paperclip_issue_identifier: str | None
+    paperclip_run_id: str | None
+    meta: dict | None  # model / usage / cost / tool audit / elapsed
+    created_at: str
+
+
+class DeepReviewStage(BaseModel):
+    key: Literal["research", "analysis", "critique"]
+    label: str
+    state: Literal["waiting", "running", "complete", "failed"]
+    iteration: int
+
+
+class DeepReviewRun(BaseModel):
+    id: int
+    project_id: int
+    decision_id: str
+    review_event_id: int | None
+    review_state_changed_at: str | None
+    status: DeepReviewStatus
+    revision_count: int
+    final_verdict: Literal["PASS", "HUMAN_REVIEW_REQUIRED"] | None
+    error: str | None
+    paperclip: dict  # company / project / goal / parent issue / 현재 issue 식별자
+    paperclip_url: str | None  # 개발용 링크 (PAPERCLIP_UI_URL이 설정된 경우만)
+    input_snapshot: dict | None  # 시작 시점 Authoritative Facts (Decision은 바뀌지 않는다)
+    stages: list[DeepReviewStage]
+    artifacts: list[DeepReviewArtifact]
+    created_at: str
+    started_at: str | None
+    completed_at: str | None

@@ -36,7 +36,7 @@ from schemas import (
     SourceAudio,
 )
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 SCHEMA_V1 = """
 CREATE TABLE projects (
@@ -211,6 +211,46 @@ ALTER TABLE source_audio ADD COLUMN title_origin TEXT NOT NULL DEFAULT 'filename
 """
 
 
+# Deep Review (Paperclip multi-agent, advisory). Decision / review 상태 / candidates는 바꾸지 않는다. 이 두 테이블에만 쓴다.
+# 결정당 진행 중(run) 1개만 (partial unique index → 중복 실행 방지). paperclip_*는 Paperclip 쪽 식별자 (원본은 Paperclip DB)
+SCHEMA_V7 = """
+CREATE TABLE deep_review_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL REFERENCES projects(id),
+    decision_id TEXT NOT NULL,
+    review_event_id INTEGER,
+    review_state_changed_at TEXT,
+    status TEXT NOT NULL,                 -- PENDING | RESEARCHING | ANALYZING | CRITIQUING | REVISING | COMPLETED | HUMAN_REVIEW_REQUIRED | FAILED
+    revision_count INTEGER NOT NULL DEFAULT 0,
+    final_verdict TEXT,                   -- PASS | HUMAN_REVIEW_REQUIRED
+    input_snapshot_json TEXT,             -- 시작 시점 Authoritative Facts + evidence snapshot
+    paperclip_json TEXT,                  -- company / project / goal / parent issue / stage issue 식별자
+    stage_started_at TEXT,
+    error TEXT,
+    created_at TEXT NOT NULL,
+    started_at TEXT,
+    completed_at TEXT,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX idx_deep_review_runs_decision ON deep_review_runs(decision_id, id);
+CREATE UNIQUE INDEX idx_deep_review_runs_one_active ON deep_review_runs(decision_id)
+    WHERE status IN ('PENDING', 'RESEARCHING', 'ANALYZING', 'CRITIQUING', 'REVISING');
+CREATE TABLE deep_review_artifacts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id INTEGER NOT NULL REFERENCES deep_review_runs(id),
+    role TEXT NOT NULL,                   -- researcher | analyst | critic
+    iteration INTEGER NOT NULL,
+    payload_json TEXT NOT NULL,           -- schema 검증을 통과한 JSON만
+    paperclip_issue_id TEXT,
+    paperclip_issue_identifier TEXT,
+    paperclip_run_id TEXT,
+    meta_json TEXT,
+    created_at TEXT NOT NULL,
+    UNIQUE (run_id, role, iteration)
+);
+"""
+
+
 def _read_trigger(raw_json: str | None):
     """review_trigger_json → V2 모델. legacy/깨진 값도 예외 없이 해석한다 (DB 값은 그대로 둔다)."""
     if not raw_json:
@@ -266,7 +306,7 @@ def init_db():
         version = 1
     elif version == 0:
         with connect() as conn:
-            conn.executescript(SCHEMA_V1 + SCHEMA_V2 + SCHEMA_V3 + SCHEMA_V4 + SCHEMA_V5 + SCHEMA_V6)
+            conn.executescript(SCHEMA_V1 + SCHEMA_V2 + SCHEMA_V3 + SCHEMA_V4 + SCHEMA_V5 + SCHEMA_V6 + SCHEMA_V7)
             pid = _insert_default_project(conn)
             _seed(conn, pid)
             conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
@@ -285,6 +325,19 @@ def init_db():
         version = 5
     if version == 5:
         _migrate_v5_to_v6()
+        version = 6
+    if version == 6:
+        _migrate_v6_to_v7()
+
+
+def _migrate_v6_to_v7():
+    """Deep Review 테이블 추가 (기존 데이터는 바꾸지 않는다). 백업 후 진행."""
+    backup = DB_PATH.with_name(f"{DB_PATH.stem}.v6-backup-{datetime.now():%Y%m%d-%H%M%S}{DB_PATH.suffix}")
+    shutil.copy2(DB_PATH, backup)
+    print(f"[migration] v6 → v7 (deep_review_runs, deep_review_artifacts), backup: {backup}")
+    with connect() as conn:
+        conn.executescript(SCHEMA_V7)
+        conn.execute("PRAGMA user_version = 7")
 
 
 def _audio_title_origin(title: str, original_filename: str) -> str:
@@ -1158,3 +1211,110 @@ def fail_interrupted_review_memos() -> int:
             (_now(),),
         )
     return cur.rowcount
+
+
+# ---------------------------------------------------------------- deep review (advisory. Decision/review 상태는 바꾸지 않는다)
+
+DEEP_REVIEW_ACTIVE = ("PENDING", "RESEARCHING", "ANALYZING", "CRITIQUING", "REVISING")
+DEEP_REVIEW_TERMINAL = ("COMPLETED", "HUMAN_REVIEW_REQUIRED", "FAILED")
+
+
+class DeepReviewInProgress(Exception):
+    """같은 결정의 Deep Review가 이미 진행 중 (partial unique index)"""
+
+
+def _json_or_none(value):
+    return json.loads(value) if value else None
+
+
+def _deep_review_row(row: sqlite3.Row) -> dict:
+    d = dict(row)
+    d["input_snapshot"] = _json_or_none(d.pop("input_snapshot_json"))
+    d["paperclip"] = _json_or_none(d.pop("paperclip_json")) or {}
+    return d
+
+
+def create_deep_review_run(project_id: int, decision_id: str, review_event_id: int | None,
+                           review_state_changed_at: str | None, input_snapshot: dict) -> dict:
+    now = _now()
+    try:
+        with connect() as conn:
+            cur = conn.execute(
+                """INSERT INTO deep_review_runs (project_id, decision_id, review_event_id, review_state_changed_at, status,
+                       input_snapshot_json, paperclip_json, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, 'PENDING', ?, '{}', ?, ?)""",
+                (project_id, decision_id, review_event_id, review_state_changed_at,
+                 json.dumps(input_snapshot, ensure_ascii=False), now, now),
+            )
+            run_id = cur.lastrowid
+    except sqlite3.IntegrityError as e:
+        raise DeepReviewInProgress(decision_id) from e
+    return get_deep_review_run(run_id)
+
+
+def get_deep_review_run(run_id: int) -> dict | None:
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM deep_review_runs WHERE id = ?", (run_id,)).fetchone()
+    return _deep_review_row(row) if row else None
+
+
+def list_deep_review_runs(decision_id: str) -> list[dict]:
+    with connect() as conn:
+        rows = conn.execute("SELECT * FROM deep_review_runs WHERE decision_id = ? ORDER BY id DESC", (decision_id,)).fetchall()
+    return [_deep_review_row(r) for r in rows]
+
+
+def list_active_deep_review_runs() -> list[dict]:
+    marks = ",".join("?" * len(DEEP_REVIEW_ACTIVE))
+    with connect() as conn:
+        rows = conn.execute(f"SELECT * FROM deep_review_runs WHERE status IN ({marks}) ORDER BY id", DEEP_REVIEW_ACTIVE).fetchall()
+    return [_deep_review_row(r) for r in rows]
+
+
+def update_deep_review_run(run_id: int, *, expect_status: str | None = None, **fields) -> dict | None:
+    """진행 중인 run만 바꾼다 (끝난 run은 그대로). expect_status를 주면 그 상태일 때만 (동시 갱신 방지).
+    바뀌지 않았으면 None."""
+    allowed = {"status", "revision_count", "final_verdict", "paperclip", "stage_started_at", "error", "started_at",
+               "completed_at"}
+    assert set(fields) <= allowed, set(fields) - allowed
+    cols, vals = [], []
+    for k, v in fields.items():
+        if k == "paperclip":
+            cols.append("paperclip_json = ?"); vals.append(json.dumps(v, ensure_ascii=False))
+        elif k == "error":
+            cols.append("error = ?"); vals.append((v or "")[:1000] or None)
+        else:
+            cols.append(f"{k} = ?"); vals.append(v)
+    cols.append("updated_at = ?"); vals.append(_now())
+    marks = ",".join("?" * len(DEEP_REVIEW_ACTIVE))
+    where = f"id = ? AND status IN ({marks})"
+    params = [*vals, run_id, *DEEP_REVIEW_ACTIVE]
+    if expect_status:
+        where += " AND status = ?"; params.append(expect_status)
+    with connect() as conn:
+        cur = conn.execute(f"UPDATE deep_review_runs SET {', '.join(cols)} WHERE {where}", params)
+    return get_deep_review_run(run_id) if cur.rowcount else None
+
+
+def add_deep_review_artifact(run_id: int, role: str, iteration: int, payload: dict, *, issue_id: str | None,
+                             issue_identifier: str | None, paperclip_run_id: str | None, meta: dict | None) -> int:
+    with connect() as conn:
+        cur = conn.execute(
+            """INSERT INTO deep_review_artifacts (run_id, role, iteration, payload_json, paperclip_issue_id,
+                   paperclip_issue_identifier, paperclip_run_id, meta_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (run_id, role, iteration, json.dumps(payload, ensure_ascii=False), issue_id, issue_identifier, paperclip_run_id,
+             json.dumps(meta, ensure_ascii=False) if meta is not None else None, _now()),
+        )
+        return cur.lastrowid
+
+
+def list_deep_review_artifacts(run_id: int) -> list[dict]:
+    with connect() as conn:
+        rows = conn.execute("SELECT * FROM deep_review_artifacts WHERE run_id = ? ORDER BY id", (run_id,)).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["payload"] = json.loads(d.pop("payload_json"))
+        d["meta"] = _json_or_none(d.pop("meta_json"))
+        out.append(d)
+    return out

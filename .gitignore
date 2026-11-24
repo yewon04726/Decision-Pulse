@@ -29,3 +29,8 @@ web/out/
 # local agent skills
 .agents/
 skills-lock.json
+
+# Paperclip (Deep Review control plane) — 프로젝트 전용 instance. 설치물·DB·instance 비밀값은 올리지 않는다
+paperclip/node_modules/
+paperclip/data/
+paperclip/org.json

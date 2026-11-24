@@ -5,6 +5,7 @@ import type {
   AgentResponse,
   Candidate,
   Decision,
+  DeepReviewRun,
   DemoChange,
   DemoPreview,
   DemoState,
@@ -199,4 +200,50 @@ export function setDemoMetric(metric: string, value: number) {
 
 export function resetDemoState() {
   return request<DemoChange[]>("POST", "/api/demo/reset");
+}
+
+
+// ---------------------------------------------------------------- Deep Review (Paperclip multi-agent)
+
+export class DeepReviewApiError extends Error {
+  readonly code: string | null;
+  readonly runId: number | null;
+
+  constructor(message: string, code: string | null, runId: number | null) {
+    super(message);
+    this.code = code;
+    this.runId = runId;
+  }
+}
+
+/** Deep Review 사용 가능 여부 (DEEP_REVIEW_ENABLED). 꺼져 있으면 버튼을 숨긴다 */
+export function getDeepReviewStatus() {
+  return request<{ enabled: boolean }>("GET", "/api/deep-review/status");
+}
+
+/** REVIEW_DUE 결정의 Deep Review 시작 (Researcher → Analyst → Critic). 응답은 바로: 202 + PENDING */
+export async function startDeepReview(decisionId: string, projectId?: number): Promise<DeepReviewRun> {
+  const qs = projectId ? `?project_id=${projectId}` : "";
+  let res: Response;
+  try {
+    res = await fetch(`/api/decisions/${encodeURIComponent(decisionId)}/deep-review${qs}`, { method: "POST" });
+  } catch {
+    throw new DeepReviewApiError("backend(:8001)에 연결할 수 없습니다.", null, null);
+  }
+  if (!res.ok) {
+    const detail = await res.json().then((b) => b.detail).catch(() => null);
+    if (detail && typeof detail === "object") {
+      throw new DeepReviewApiError(detail.message ?? `HTTP ${res.status}`, detail.code ?? null, detail.run_id ?? null);
+    }
+    throw new DeepReviewApiError(typeof detail === "string" ? detail : `HTTP ${res.status}`, null, null);
+  }
+  return res.json();
+}
+
+export function getDeepReviews(decisionId: string) {
+  return request<DeepReviewRun[]>("GET", `/api/decisions/${encodeURIComponent(decisionId)}/deep-reviews`);
+}
+
+export function getDeepReview(runId: number) {
+  return request<DeepReviewRun>("GET", `/api/deep-reviews/${runId}`);
 }

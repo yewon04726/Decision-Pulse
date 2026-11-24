@@ -8,6 +8,7 @@ import { ButtonLink } from "@/components/ui/button";
 import { HumanAuthoredTag, SourceTypeBadge, StatusBadge, TopicTag } from "@/components/decision/status-badge";
 import { TriggerGauge, V2TriggerView } from "@/components/decision/trigger-gauge";
 import { METRIC_TOOL_COMMAND, ServiceAlert } from "@/components/layout/service-alert";
+import { DeepReviewPanel } from "@/components/review/deep-review-panel";
 import { ReviewMemoPanel } from "@/components/review/review-memo-panel";
 import { getDecision, getSources } from "@/lib/api";
 import { getCurrentProject } from "@/lib/project";
@@ -113,6 +114,7 @@ async function DecisionDetail({ id }: { id: string }) {
       )}
 
       <ReviewMemoPanel decisionId={decision.id} reviewDue={status === "REVIEW_DUE"} />
+      <DeepReviewPanel decisionId={decision.id} projectId={decision.project_id} reviewDue={status === "REVIEW_DUE"} />
 
       <div className="grid gap-14 lg:grid-cols-[1.5fr_1fr] lg:gap-12">
         <div className="space-y-14">

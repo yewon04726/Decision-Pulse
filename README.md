@@ -37,7 +37,10 @@ Review Event ──▶ Web alert (모든 Workspace 화면 상단)
              └─▶ Telegram 알림 (hermes send, 이벤트당 1회)
   │
   ▼
-Review Memo (사용자가 요청 시, Hermes + read-only MCP) ──▶ 사람이 재검토
+REVIEW_DUE
+      ├─ Review Memo   (Normal Review: 사용자 요청 시, Hermes 단일 agent + read-only MCP)
+      └─ Deep Review   (고신뢰: 사용자 요청 시, Paperclip → Evidence Researcher → Decision Analyst → Review Critic)
+            ──▶ 사람이 재검토 (Decision은 자동으로 바뀌지 않는다)
 ```
 
 ---
@@ -53,6 +56,7 @@ Review Memo (사용자가 요청 시, Hermes + read-only MCP) ──▶ 사람�
 | Dify | :80 | Ask Agent Chatflow + Knowledge |
 | Hermes | `~/.hermes` (gateway) | Review Memo 작성, Telegram 발송. MCP: `decision-debt`(read-only), `gbrain`(read-only) |
 | gbrain | `~/decision-debt-brain` | 승인된 Decision의 Markdown knowledge layer + semantic search |
+| Paperclip | `paperclip/` · 127.0.0.1:3110 | Deep Review orchestration/control plane (조직 3 agent, ticket, checkout, budget). 프로젝트 전용 instance |
 
 > Dify / llama-swap / check_metric 설정은 이 프로젝트에서 수정하지 않는다. `docker compose down -v` 금지.
 
@@ -61,13 +65,14 @@ Review Memo (사용자가 요청 시, Hermes + read-only MCP) ──▶ 사람�
 ## 실행
 
 ```bash
-./dev.sh    # Dify → llama-swap → check_metric → backend → web → Hermes gateway, 이어서 health check
+./dev.sh    # Dify → llama-swap → check_metric → Paperclip → backend → web → Hermes gateway, 이어서 health check
 ./stop.sh   # dev.sh가 시작한 프로세스만 종료
 ```
 
 - 이미 실행 중인 서비스(포트 LISTEN 중)는 건너뛰고, stop.sh도 종료하지 않는다.
 - dev.sh가 시작한 프로세스는 `.run/<name>.pid`(pid, 시작 시각, 명령 패턴)에 기록되고, stop.sh는 세 값이 모두 맞을 때만 프로세스 그룹 단위로 종료한다.
-- 로그: `logs/{dify,llama-swap,check-metric,backend,web,hermes}.log`
+- 로그: `logs/{dify,llama-swap,check-metric,paperclip,backend,web,hermes}.log`
+- Paperclip은 `paperclipai run`(foreground)을 dev.sh 프로세스 그룹으로 띄운다 → stop.sh가 embedded PostgreSQL까지 함께 종료. launchd 서비스는 설치하지 않는다. 설치 안 돼 있으면 건너뛰고 Deep Review만 비활성.
 - **Next.js 보안 업그레이드 안내**: 새 안내가 나오면 `next dev`가 첫 실행에서 멈춘다(health check에서 web 실패). 같은 명령을 한 번 더 실행하면 이어서 뜬다.
 
 수동 실행:
@@ -90,7 +95,7 @@ cd web && npm run dev          # http://localhost:3000
 | --- | --- |
 | `/` | **Project Selector** — 프로젝트 carousel(drag/swipe/키보드/trackpad) + 선택 프로젝트 요약(상태 donut, Review Due 미리보기). Open project → Workspace |
 | `/overview` | Workspace 첫 화면: 01 Review due → 02 Candidates → 03 Review memos → 04 Decision status → 05 Knowledge & metrics |
-| `/decisions`, `/decisions/[id]` | Decision 목록 / 상세 (evidence, review trigger, revision history, **Review Memo** 패널) |
+| `/decisions`, `/decisions/[id]` | Decision 목록 / 상세 (evidence, review trigger, revision history, **Review Memo**(single) + **Deep Review**(multi) 패널) |
 | `/review` | **Candidates** — Review Queue 전용 (Pending review → Processed). Edit / Ignore / Approve |
 | `/sources` | **Sources** — 모든 원문 입력(`+ Add source`) + Calendar + All sources |
 | `/agent` | Ask Agent (Dify Chatflow, Evidence / Tool Activity) |
@@ -141,7 +146,7 @@ cd web && npm run dev          # http://localhost:3000
   - REVIEW_DUE → ACTIVE: 복구 이벤트 (알림 없음)
   - 같은 상태 유지: 이벤트 없음
 - Telegram은 `hermes send --to telegram`으로 보낸다. backend에는 token / chat id를 두지 않는다. 실패해도 판정·기록에 영향 없음, 재시도 큐 없음.
-- 웹은 `GET /api/review-events?acknowledged=false`를 10초마다 polling해 상단 alert로 보여주고, `확인`으로 acknowledge한다 (Decision 상태는 바뀌지 않음).
+- 웹은 `GET /api/review-events?project_id=&acknowledged=false`를 10초마다 polling해 상단 alert로 보여주고, `확인`으로 acknowledge한다 (Decision 상태는 바뀌지 않음).
 
 ### Review Memo (`services/review_memo.py`, prompt v4)
 
@@ -149,6 +154,24 @@ cd web && npm run dev          # http://localhost:3000
 - Hermes를 `-z` oneshot으로 실행하고 toolset은 `decision-debt,gbrain`(둘 다 read-only MCP)만 허용한다. 사용한 tool은 Hermes `state.db`로 감사(tool_audit)한다.
 - 사실 부분(결정, 조건, 관측값, 근거 인용)은 backend가 DB에서 그대로 렌더링하고, Hermes는 분석 섹션만 쓴다.
 - 재생성하면 이전 memo는 History로 남는다.
+
+### Deep Review (Paperclip multi-agent, `services/deep_review.py`)
+
+자세한 설계: [docs/architecture/deep_review.md](docs/architecture/deep_review.md)
+
+- 일반 검토는 저비용 Review Memo(single agent), 고신뢰 검토는 Deep Review, **최종 결정은 항상 사람**. Review Memo를 대체하지 않는다.
+- REVIEW_DUE 결정 상세에서 **Run Deep Review**를 눌렀을 때만 시작한다 (REVIEW_DUE 자동 실행 없음, heartbeat 타이머 없음).
+- Paperclip = control plane: company `Decision Pulse Deep Review`, 보고선 Evidence Researcher → Decision Analyst → Review Critic,
+  결정 1건 = parent ticket 1개 + 역할별 하위 ticket (역할당 1 agent, atomic checkout), 월 budget hard stop.
+- 역할 / 권한
+  - Evidence Researcher: Hermes + Decision Debt MCP + gbrain MCP (둘 다 read-only, state.db로 tool 감사). 사실 수집만
+  - Decision Analyst: tool 없음. Researcher JSON만 보고 known_changes(사실)와 implications(추론)를 분리
+  - Review Critic: tool 없음. PASS | REVISE. REVISE면 Analyst에게 **한 번만** 반환, 그래도 PASS가 아니면 HUMAN_REVIEW_REQUIRED
+- backend가 단계마다 JSON schema + reference(`E1`, `FACT:…`, 실제 `DEC-…`)를 검증한 뒤에만 다음 ticket을 만든다. 실패한 출력은 저장하지 않는다.
+- Authoritative Facts(결정·rationale·전제·조건·관측값·evidence 원문)는 backend snapshot 그대로. 화면에서 `Authoritative record`와 `AI inference`를 구분해 표시.
+- Paperclip이 꺼져 있거나 agent가 실패/timeout/budget 차단이면 run만 FAILED (재시도 가능). Review Monitor / Telegram / Review Memo / Ask Agent는 그대로 동작.
+- adapter: Paperclip `process` adapter + `backend/deep_review_worker.py`. `hermes_gateway`는 Hermes API server가 꺼져 있고,
+  `hermes_local`은 사용자 전역 `~/.hermes/skills`에 skill을 설치하므로 쓰지 않는다 (이유는 설계 문서).
 
 ### Read-only MCP (`backend/mcp_server.py`)
 
@@ -189,10 +212,11 @@ Hermes가 stdio subprocess로 띄운다 (`~/.hermes/config.yaml`의 `mcp_servers
 | `POST /api/candidates/delete` | ignored 후보 기록 삭제 (Source / Decision은 유지) |
 | `GET /api/review-events`, `POST /api/review-events/{id}/acknowledge` | Review Monitor 이벤트 |
 | `POST /api/decisions/{id}/review-memo`, `GET .../review-memos`, `GET /api/review-memos/{id}` | Review Memo |
+| `POST /api/decisions/{id}/deep-review?project_id=`, `GET /api/decisions/{id}/deep-reviews`, `GET /api/deep-reviews/{run_id}`, `GET /api/deep-review/status` | Deep Review (202 + PENDING / 409 진행 중·REVIEW_DUE 아님 / 503 꺼짐) |
 | `POST /api/agent/chat` | Ask Agent (Dify Chatflow proxy) |
 | `GET /api/demo/status`, `GET /api/demo/state`, `GET /api/demo/state/{metric}/preview`, `PATCH /api/demo/state/{metric}`, `POST /api/demo/reset` | Demo Control Center (Demo Mode일 때만) |
 
-## DB (SQLite, `PRAGMA user_version = 6`)
+## DB (SQLite, `PRAGMA user_version = 7`)
 
 | 테이블 | 내용 |
 | --- | --- |
@@ -205,6 +229,7 @@ Hermes가 stdio subprocess로 띄운다 (`~/.hermes/config.yaml`의 `mcp_servers
 | `decision_review_state`, `review_events` | Review Monitor 기준 상태 / 변화 이력 (v2) |
 | `decision_knowledge_sync` | gbrain 동기화 상태 (v4) |
 | `decision_review_memos` | Review Memo + 생성 시점 snapshot + tool_audit (v5) |
+| `deep_review_runs`, `deep_review_artifacts` | Deep Review run (상태 / verdict / Paperclip 식별자 / 시작 시점 snapshot) + 역할별 검증된 JSON (v7) |
 
 ---
 
@@ -228,14 +253,18 @@ Hermes가 stdio subprocess로 띄운다 (`~/.hermes/config.yaml`의 `mcp_servers
 | `REVIEW_MONITOR_ENABLED`, `REVIEW_MONITOR_INTERVAL_SECONDS` | `true`, `30` | Review Monitor |
 | `DEMO_MODE_ENABLED` | `false` | Demo Control Center (production에서는 켜지 않는다) |
 | `DEMO_TOOL_DIR` | `~/decision-debt-tool` | Demo가 실행하는 sample DB script 위치 |
+| `DEEP_REVIEW_ENABLED` | `false` | Deep Review (Paperclip) |
+| `PAPERCLIP_API_URL`, `PAPERCLIP_UI_URL` | `http://127.0.0.1:3110/api`, — | Paperclip API / 개발용 링크 (비우면 링크 숨김) |
+| `DEEP_REVIEW_MODEL`, `DEEP_REVIEW_REASONING_EFFORT`, `DEEP_REVIEW_PROVIDER_SORT` | `OPENROUTER_MODEL`, `OPENROUTER_REASONING_EFFORT`, `throughput` | Analyst / Critic LLM (tool 없음) |
+| `DEEP_REVIEW_STAGE_TIMEOUT_SECONDS`, `DEEP_REVIEW_RESEARCH_TIMEOUT_SECONDS`, `DEEP_REVIEW_LLM_TIMEOUT_SECONDS` | `420`, `240`, `240` | 단계 대기 / Hermes / LLM 시간 상한 |
 
 ---
 
 ## 테스트
 
 ```bash
-cd backend && .venv/bin/python -m unittest discover -s tests   # 125개 (실제 Telegram / Hermes / gbrain 호출 없음)
-cd web && npm run lint && npx tsc --noEmit && npm test          # npm test: Node 내장 test runner (lib/*.test.ts)
+cd backend && .venv/bin/python -m unittest discover -s tests   # 147개 (실제 Telegram / Hermes / gbrain / Paperclip / LLM 호출 없음)
+cd web && npm run lint && npx tsc --noEmit && npm test && npm run build   # npm test: Node 내장 test runner (lib/*.test.ts)
 ```
 
 ## 운영 script (`backend/scripts/`)
@@ -248,6 +277,8 @@ cd web && npm run lint && npx tsc --noEmit && npm test          # npm test: Node
 | `backfill_audio_titles.py` | 오디오 Source 제목 backfill |
 | `dedupe_sources.py` | 같은 원문(정규화 content hash)으로 중복 등록된 미연결 Source 정리. 기본 dry-run, `--apply`면 백업 후 삭제 |
 | `run_extraction_comparison.py` | local vs OpenRouter 추출 비교 실험 |
+| `setup_paperclip_org.py` | Paperclip company / goal / project / agent 3명 + budget을 만들거나 맞춘다 (멱등, 기본 dry-run, `--apply`) |
+| `eval_deep_review.py` | Single Review Memo vs Deep Review 비교 → `docs/evals/deep_review_eval.json` (`--run <id>`면 먼저 Deep Review 실행) |
 
 ---
 
@@ -260,9 +291,11 @@ backend/
 ├─ db.py               스키마 v1~v6 + migration + CRUD
 ├─ schemas.py          Pydantic 모델 (Review Trigger V2 포함)
 ├─ mcp_server.py       Hermes용 read-only MCP (stdio)
+├─ deep_review_worker.py  Paperclip process adapter worker (researcher / analyst / critic)
 ├─ services/           review, review_monitor, review_trigger, review_memo, telegram_notifier,
 │                      extraction, metrics, stt, audio_ingest, source_title, knowledge_sync,
-│                      gbrain_sync, decision_read, demo_state, dify, text
+│                      gbrain_sync, decision_read, demo_state, dify, text,
+│                      deep_review, deep_review_contract, paperclip_client
 ├─ scripts/            위 운영 script
 └─ tests/              unittest (fake_hermes / fake_gbrain 포함)
 
@@ -272,6 +305,10 @@ web/
 ├─ app/demo/                        Demo Control Center
 ├─ components/                      portfolio · layout · decision · review · sources · demo · agent · project · ui
 └─ lib/                             api(서버) · client-api · types · metrics · portfolio · meeting-date · project
+
+agents/deep-review/   역할별 instruction (researcher / analyst / critic.md) — Paperclip AGENTS.md + worker prompt
+paperclip/            Paperclip 설치(package.json, 버전 고정) + instance data(git 제외) + org.json(git 제외)
+docs/evals/           Single vs Multi 평가 결과
 ```
 
 디자인: monochrome editorial (ink / paper / hairline). 색 accent(orange)는 REVIEW_DUE에만 쓴다. 토큰은 `web/app/globals.css`.
@@ -283,4 +320,6 @@ web/
 - **중복 Source 방지 없음**: 같은 원문을 다시 Extract하면 새 Source가 생긴다. 과거 중복은 `dedupe_sources.py`로 정리했다 (2026-11-13, 60 → 28).
 - **compound / duration 조건은 자동 판정하지 않는다** (예: `MVP 레디스 미도입`). Demo에서 latency를 올려도 이 결정은 REVIEW_DUE가 되지 않는다.
 - metric source는 기본 프로젝트(`check_metric_default`)만 연결되어 있다. 다른 프로젝트의 metric 조건은 `Metric not connected`.
-- `backend/.env.example`은 초기 4개 키만 담고 있다 — 전체 목록은 위 환경 변수 표 참고.
+- `backend/.env.example`은 초기 4개 키 + Deep Review 키만 담고 있다 — 전체 목록은 위 환경 변수 표 참고.
+- Deep Review의 ticket 접두어는 Paperclip이 company 이름으로 정해 `DEC-7`처럼 보인다 (Decision ID와 혼동 주의, 변경 API 없음).
+- Paperclip process run은 비용 정보가 없는 receipt를 남기므로 budget policy를 `unpricedUsagePolicy: allow`로 둔다. 실제 LLM 비용은 worker가 보고한다.

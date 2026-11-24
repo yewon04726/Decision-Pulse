@@ -106,7 +106,7 @@ export function ReviewMemoPanel({ decisionId, reviewDue }: { decisionId: string;
             Review Memo
           </span>
         }
-        description="Hermes가 Decision Debt(read-only)와 gbrain(read-only)만 조회해 작성한 검토 메모입니다. 참고용이며 결정을 바꾸지 않습니다."
+        description="Single-agent · Hermes가 Decision Debt(read-only)와 gbrain(read-only)만 조회해 작성한 검토 메모입니다. 참고용이며 결정을 바꾸지 않습니다."
         action={
           <div className="flex flex-wrap gap-2 sm:shrink-0 sm:justify-end">
             {latestCompleted && (
