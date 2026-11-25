@@ -1,348 +1,439 @@
-# Decision Debt Agent — Decision Pulse
+# Decision Pulse
 
-과거 기술 결정과 그 **재검토 조건**을 기억하고, 외부 상태(지표)가 조건을 넘으면 "다시 검토할 때"라고 알려주는 에이전트.
-웹 UI 이름은 **Decision Pulse**.
+> 회의에서 내려진 기술적 의사결정을 기억하고, **다시 검토해야 할 시점까지 추적하는 AI Decision Memory Agent**
 
-- 결정은 사람이 승인한 것만 저장한다 (AI 추출 결과는 항상 Candidate).
-- 재검토 판정은 LLM이 아니라 코드(deterministic)로 한다.
-- 조건 충족은 결정을 자동으로 바꾸지 않는다. 사람의 재검토가 필요하다는 신호일 뿐이다.
+회의록에는 많은 결정이 남지만 시간이 지나면  
+**“그때 왜 이렇게 결정했지?”**, **“언제 다시 검토하기로 했지?”**를 놓치기 쉽습니다.
 
-배경과 원래 설계는 [docs/CLAUDE_HANDOFF_DECISION_DEBT.md](docs/CLAUDE_HANDOFF_DECISION_DEBT.md),
-구조도는 [docs/architecture/](docs/architecture/) (`01_decision_debt_system_architecture`, `02_decision_debt_lifecycle` — HTML/PNG).
+Decision Pulse는 텍스트·문서·음성 회의록에서 의사결정과 근거, 재검토 조건을 추출하고 사람이 승인한 결정만 저장합니다. 이후 실제 운영 지표를 모니터링해 재검토 시점을 감지하고, 필요할 경우 Multi-Agent Deep Review를 통해 기존 근거와 현재 상황을 다시 분석합니다.
+<img width="1458" height="797" alt="image" src="https://github.com/user-attachments/assets/f8e50fe6-84c1-486f-9e52-fb55fb1d19e8" />
+<img width="1458" height="802" alt="image" src="https://github.com/user-attachments/assets/2ec2e642-25eb-46ee-8a57-9f0ab0854470" />
+<img width="1457" height="800" alt="image" src="https://github.com/user-attachments/assets/ad9b14de-56c0-4da4-b492-0d86244c5b90" />
+<img width="1456" height="740" alt="image" src="https://github.com/user-attachments/assets/4f94f8b2-c9f6-48b3-bc2b-2a1bdbdf5f77" />
+
+
 
 ---
 
-## Lifecycle
+## Why Decision Pulse?
 
-```
-Input (text · .md/.txt · audio)
-  │  Sources > Add source
-  ▼
-Source ── audio면 whisper.cpp 로컬 STT → transcript
-  │
-  ▼
-Extraction (Qwen2.5-7B local, llama-swap) ── 구조화 실패 시에만 OpenRouter로 재추출 (EXTRACTION_MODE=auto)
-  │
-  ▼
-Candidate ── Candidates 화면에서 사람이 Approve / Edit / Ignore
-  │ Approve
-  ▼
-Decision (SQLite = 유일한 원본) ──▶ 파생 사본: Dify Knowledge, gbrain(Markdown + embedding)
-  │
-  ▼
-Review Monitor (30초 주기) ── check_metric으로 현재값 조회 → review trigger 판정
-  │ ACTIVE → REVIEW_DUE
-  ▼
-Review Event ──▶ Web alert (모든 Workspace 화면 상단)
-             └─▶ Telegram 알림 (hermes send, 이벤트당 1회)
-  │
-  ▼
+예를 들어 회의에서 다음과 같은 결정이 내려질 수 있습니다.
+
+> “MVP에서는 SQLite를 유지하죠.  
+> 사용자가 1,000명을 넘으면 다시 검토합시다.”
+
+일반적인 회의록에서는 이 문장이 기록된 뒤 잊히기 쉽습니다.
+
+Decision Pulse는 이를 다음과 같이 관리합니다.
+
+```text
+회의록
+  ↓
+Decision Candidate 추출
+  ↓
+사람의 검토 및 승인
+  ↓
+Decision + Rationale + Review Trigger 저장
+  ↓
+운영 지표 모니터링
+  ↓
+user_count > 1000
+  ↓
 REVIEW_DUE
-      ├─ Review Memo   (Normal Review: 사용자 요청 시, Hermes 단일 agent + read-only MCP)
-      └─ Deep Review   (고신뢰: 사용자 요청 시, Paperclip → Evidence Researcher → Decision Analyst → Review Critic)
-                        ※ Deep Review는 ACTIVE / Needs mapping / Manual review 결정에서도 수동 실행 가능 (review_reason=MANUAL)
-            ──▶ 사람이 재검토 (Decision은 자동으로 바뀌지 않는다)
+  ↓
+Web / Telegram 알림
+  ↓
+Multi-Agent Deep Review
 ```
 
 ---
 
-## 구성
+## Key Features
 
-| 구성 요소 | 위치 / 포트 | 역할 |
-| --- | --- | --- |
-| web | `web/` · :3000 | Next.js 16 (App Router) + React 19 + Tailwind v4. `/api/*`는 backend로 rewrite |
-| backend | `backend/` · :8001 | FastAPI + SQLite. 판정, Review Monitor, 추출, 연동 전부 |
-| check_metric | `~/decision-debt-tool` · :8000 | 지표 resolver (`GET /metrics/{name}`). Dify Agent와 backend가 같은 서버를 호출 |
-| llama-swap | :8080 | 로컬 LLM (Qwen2.5-7B, qwen3-embedding) |
-| Dify | :80 | Ask Agent Chatflow + Knowledge |
-| Hermes | `~/.hermes` (gateway) | Review Memo 작성, Telegram 발송. MCP: `decision-debt`(read-only), `gbrain`(read-only) |
-| gbrain | `~/decision-debt-brain` | 승인된 Decision의 Markdown knowledge layer + semantic search |
-| Paperclip | `paperclip/` · 127.0.0.1:3110 | Deep Review orchestration/control plane (조직 3 agent, ticket, checkout, budget). 프로젝트 전용 instance |
+### 1. Decision Extraction
 
-> Dify / llama-swap / check_metric 설정은 이 프로젝트에서 수정하지 않는다. `docker compose down -v` 금지.
+텍스트, 문서, 음성 회의록에서 다음 정보를 구조화합니다.
 
----
+- Decision
+- Rationale
+- Assumptions
+- Review Trigger
+- Source / Evidence
 
-## 실행
+로컬 **Qwen2.5-7B**를 기본 모델로 사용하고, 구조화에 실패한 경우에만 **OpenRouter 외부 모델**로 fallback합니다.
 
-```bash
-./dev.sh    # Dify → llama-swap → check_metric → Paperclip → backend → web → Hermes gateway, 이어서 health check
-./stop.sh   # dev.sh가 시작한 프로세스만 종료
+음성 회의는 **whisper.cpp**를 이용해 로컬에서 STT 처리합니다.
+
+AI가 추출한 결과는 바로 Decision으로 저장하지 않습니다.
+
+```text
+AI Extraction
+→ Candidate
+→ Human Review
+→ Approve / Edit / Ignore
+→ Confirmed Decision
 ```
 
-- 이미 실행 중인 서비스(포트 LISTEN 중)는 건너뛰고, stop.sh도 종료하지 않는다.
-- dev.sh가 시작한 프로세스는 `.run/<name>.pid`(pid, 시작 시각, 명령 패턴)에 기록되고, stop.sh는 세 값이 모두 맞을 때만 프로세스 그룹 단위로 종료한다.
-- 로그: `logs/{dify,llama-swap,check-metric,paperclip,backend,web,hermes}.log`
-- Paperclip은 `paperclipai run`(foreground)을 dev.sh 프로세스 그룹으로 띄운다 → stop.sh가 embedded PostgreSQL까지 함께 종료. launchd 서비스는 설치하지 않는다. 설치 안 돼 있으면 건너뛰고 Deep Review만 비활성.
-- **Next.js 보안 업그레이드 안내**: 새 안내가 나오면 `next dev`가 첫 실행에서 멈춘다(health check에서 web 실패). 같은 명령을 한 번 더 실행하면 이어서 뜬다.
+---
 
-수동 실행:
+### 2. Review Trigger Monitoring
 
-```bash
-# backend (최초 1회: python3 -m venv .venv && .venv/bin/pip install -r requirements.txt)
-cd backend && .venv/bin/uvicorn app:app --host 127.0.0.1 --port 8001
+재검토 조건을 세 가지 상태로 구분합니다.
 
-# web (최초 1회: npm install)
-cd web && npm run dev          # http://localhost:3000
+| 상태 | 의미 |
+|---|---|
+| `CONNECTED` | 실제 데이터 소스가 연결되어 자동 모니터링 가능 |
+| `NEEDS_MAPPING` | 측정 가능한 조건이지만 아직 데이터 소스가 연결되지 않음 |
+| `MANUAL` | 사람이 직접 판단해야 하는 조건 |
+
+예:
+
+```text
+user_count > 1000
+→ CONNECTED
+
+deployment_count > 5 / 7d
+→ NEEDS_MAPPING
+
+"고객 불만이 많아지면 다시 검토"
+→ MANUAL
 ```
 
-`decision_debt.db`는 최초 실행 시 `seed_data.json`으로 만들어진다. 스키마가 바뀌면 시작할 때 백업(`decision_debt.v<N>-backup-*.db`) 후 자동 migration.
+`CONNECTED` 조건만 Review Monitor가 자동 평가합니다.
 
----
-
-## 화면 (web)
-
-| 경로 | 화면 |
-| --- | --- |
-| `/` | **Project Selector** — 프로젝트 carousel(drag/swipe/키보드/trackpad) + 선택 프로젝트 요약(상태 donut, Review Due 미리보기). Open project → Workspace |
-| `/overview` | Workspace 첫 화면: 01 Review due → 02 Candidates → 03 Review memos → 04 Decision status → 05 Knowledge & metrics |
-| `/decisions`, `/decisions/[id]` | Decision 목록 / 상세 (evidence, review trigger, revision history, **Review Memo**(single) + **Deep Review**(multi) 패널) |
-| `/review` | **Candidates** — Review Queue 전용 (Pending review → Processed). Edit / Ignore / Approve |
-| `/sources` | **Sources** — 모든 원문 입력(`+ Add source`) + Calendar + All sources |
-| `/agent` | Ask Agent (Dify Chatflow, Evidence / Tool Activity) |
-| `/demo` | **Demo Control Center** (발표/개발 전용, `DEMO_MODE_ENABLED=true`일 때만) |
-
-### 프로젝트 선택
-
-현재 프로젝트는 쿠키 `dd_project`에 저장된다. Selector의 Open project, Workspace 상단의 프로젝트 전환 메뉴가 쿠키를 바꾼다.
-모든 데이터(decisions / sources / candidates)는 `project_id` 범위로 조회된다.
-
-### Sources
-
-- **Add source** (Sources · Candidates · Overview에서 같은 컴포넌트):
-  - Paste text / Upload document(.md, .txt) → `POST /api/extract` 1회. 추출이 성공해야 Source가 저장되고 Candidate가 생긴다.
-  - Upload audio(.wav, .mp3, .m4a) → 업로드 즉시 Source 생성 → 로컬 STT → 전사 완료 후 Extract.
-- **Calendar**: Candidate(pending/approved) 또는 Decision evidence와 연결된 회의록(meeting / audio)만 표시. 날짜는 회의록 첫머리에 적힌 날짜, 없으면 그 회의록 후보를 처음 Approve한 날짜. 둘 다 없으면 표시하지 않는다.
-- **All sources**: 등록된 모든 원문 (최신순). 행마다 `Decisions N / Candidates N` 또는 `Unlinked`.
-
-### Demo Control Center (`/demo`)
-
-발표 중 터미널 없이 **외부 상태값**(check_metric이 읽는 sample DB)을 바꿔 실제 흐름을 시연한다.
-
-- 바꾸는 것은 sample DB 값뿐. REVIEW_DUE / Review Event / Web alert / Telegram은 기존 Review Monitor가 처리한다.
-- 값 변경은 tool의 CLI script를 그대로 실행한다 (`set_user_count.py`, `set_metric.py`) → 터미널과 같은 코드.
-- trigger 경계 preset, 변경 미리보기(backend 판정 함수), 영향받는 결정, Review Monitor 대기/결과 피드백, Reset(baseline: `user_count 900`, `search_api_p95_ms 500`, `server_count 1`), 시나리오.
-- `DEMO_MODE_ENABLED=false`(기본)면 메뉴가 숨겨지고 `/demo`와 `/api/demo/*` 전부 404.
-
----
-
-## Review Trigger와 판정
-
-```
-Decision → Review Trigger → Canonical Metric → (resolver) Data Source Adapter → Observed Value
+```text
+ACTIVE
+→ 조건 충족
+→ REVIEW_DUE
+→ Web Alert
+→ Telegram Alert
 ```
 
-Decision은 특정 DB/API를 알지 않는다. 지표 정의는 **Canonical Metric Registry**(`backend/metric_registry.py`) 한 곳에 있다.
-
-| mapping_status | 의미 | Review Monitor | 화면 |
-| --- | --- | --- | --- |
-| `CONNECTED` | registry 지표에 resolver(data source adapter)가 있고 프로젝트에 metric source가 연결됨 | 자동 평가 → ACTIVE / REVIEW_DUE (읽기 실패면 UNKNOWN) | ● 자동 모니터링 + 현재값 + 데이터 소스 |
-| `NEEDS_MAPPING` | 측정 가능한 수치 조건인데 연결된 data source가 없음 (registry에 resolver 없음 / 미등록 지표 / 프로젝트 미연결) | 평가·이벤트 없음 | ○ 데이터 연결 필요 |
-| `MANUAL` | 객관적 자동 측정값으로 표현하기 어려움 (manual / event / date / duration / 주관적 표현 / compound) | 평가·이벤트 없음 | ○ 수동 확인 필요 |
-
-- `UNKNOWN`은 **CONNECTED인데 지금 값을 읽지 못한** 평가 결과다 (`evaluation_status`). 연결 안 된 지표를 UNKNOWN으로 표시하지 않는다.
-- 상태는 저장하지 않고 읽을 때 registry로 계산한다 (`services/trigger_status.py`). API: `DecisionView.trigger_status`
-  `{mapping_status, evaluation_status, canonical_metric, metric_label, resolver, data_source, window, reason}`. 기존 필드는 그대로.
-- 연결된 지표: `user_count`(sqlite:users), `search_api_p95_ms`, `server_count`(metrics table) — 기존 check_metric resolver 재사용.
-- 정의만 있는 지표(NEEDS_MAPPING): `deployment_count`, `error_rate`, `monthly_revenue`, `failed_job_count`, `daily_log_volume_gb`.
-- alias 정규화: 원문 지표 표현 → canonical 이름. 완전 일치 + 단위 호환만 (LLM이 지표 이름을 만들지 않는다). 집계 기간(`일주일에 5회` → `7d`)은 원문에서 읽는다.
-- 추출 시 주관적 표현(불만, 부담, 판단, 전략 …)의 metric은 validator가 `manual`로 내린다. 등록 안 된 수치 지표는 실패가 아니라 NEEDS_MAPPING으로 저장된다.
-- **새 data source 붙이는 곳**: `services/metric_adapters.py`에 adapter(`resolve(project, names) -> (readings, errors)`)를 구현해
-  `ADAPTERS`에 등록하고, registry 지표의 `resolver`를 그 이름으로 바꾼다. 저장된 Decision은 고치지 않아도 CONNECTED가 된다.
-- 판정 코드: `services/review.py` (`evaluate_trigger`, `display_status`, `to_view`). `/api/decisions`, Review Monitor, Demo 미리보기가 같은 함수를 쓴다.
-
-### Review Monitor (`services/review_monitor.py`)
-
-- `REVIEW_MONITOR_INTERVAL_SECONDS`(기본 30초)마다 metric source가 연결된 프로젝트의 active 결정을 확인한다. LLM 호출 없음.
-- 기준 상태는 `decision_review_state`, 변화 이력은 `review_events`.
-  - 처음 확인: 기준만 저장 (이벤트 없음)
-  - ACTIVE → REVIEW_DUE: 이벤트 1개 + **Telegram 1회**
-  - REVIEW_DUE → ACTIVE: 복구 이벤트 (알림 없음)
-  - 같은 상태 유지: 이벤트 없음
-- Telegram은 `hermes send --to telegram`으로 보낸다. backend에는 token / chat id를 두지 않는다. 실패해도 판정·기록에 영향 없음, 재시도 큐 없음.
-- 웹은 `GET /api/review-events?project_id=&acknowledged=false`를 10초마다 polling해 상단 alert로 보여주고, `확인`으로 acknowledge한다 (Decision 상태는 바뀌지 않음).
-
-### Review Memo (`services/review_memo.py`, prompt v4)
-
-- REVIEW_DUE 결정 상세에서 사용자가 Generate할 때만 만든다 (advisory — Decision / review 상태 / Candidate를 바꾸지 않는다).
-- Hermes를 `-z` oneshot으로 실행하고 toolset은 `decision-debt,gbrain`(둘 다 read-only MCP)만 허용한다. 사용한 tool은 Hermes `state.db`로 감사(tool_audit)한다.
-- 사실 부분(결정, 조건, 관측값, 근거 인용)은 backend가 DB에서 그대로 렌더링하고, Hermes는 분석 섹션만 쓴다.
-- 재생성하면 이전 memo는 History로 남는다.
-
-### Deep Review (Paperclip multi-agent, `services/deep_review.py`)
-
-자세한 설계: [docs/architecture/deep_review.md](docs/architecture/deep_review.md)
-
-- 일반 검토는 저비용 Review Memo(single agent), 고신뢰 검토는 Deep Review, **최종 결정은 항상 사람**. Review Memo를 대체하지 않는다.
-- 유효한(active) Decision 상세에서 **Run Deep Review**를 눌렀을 때만 시작한다 (자동 실행 없음, heartbeat 타이머 없음).
-  - **REVIEW_DUE = 시스템이 '지금 재검토할 시점'이라고 판단한 상태 / Deep Review = 사람이 필요할 때 실행하는 분석.**
-    REVIEW_DUE가 아니어도(ACTIVE, UNKNOWN, NEEDS_MAPPING, MANUAL) 실행할 수 있다. 막는 경우: 없는/대체된 Decision, 진행 중 run, 기능 꺼짐.
-  - `review_reason`: 시작 시점에 REVIEW_DUE면 `TRIGGERED`, 아니면 `MANUAL` (누가 눌렀는지가 아니라 왜 재검토 대상인지).
-  - **Deep Review 실행 ≠ REVIEW_DUE 전환**: review state / review event / Telegram / trigger 평가는 바뀌지 않는다.
-  - snapshot에 실행 시점 `review_reason` / `review_state` / `mapping_status` / `current_value`를 고정한다. 현재 관측값이 없으면
-    (NEEDS_MAPPING: metric not mapped, MANUAL: 사람이 판단) backend가 unknown을 결정적으로 넣고, `FACT:observed`를 근거로 쓸 수 없게 한다.
-    agent가 값을 만들거나 manual run에서 trigger 충족을 주장하면 거부(Researcher) 또는 unsupported claim(Critic).
-- Paperclip = control plane: company `Decision Pulse Deep Review`, 보고선 Evidence Researcher → Decision Analyst → Review Critic,
-  결정 1건 = parent ticket 1개 + 역할별 하위 ticket (역할당 1 agent, atomic checkout), 월 budget hard stop.
-- 역할 / 권한
-  - Evidence Researcher: Hermes + Decision Debt MCP + gbrain MCP (둘 다 read-only, state.db로 tool 감사). 사실 수집만
-  - Decision Analyst: tool 없음. Researcher JSON만 보고 known_changes(사실)와 implications(추론)를 분리
-  - Review Critic: tool 없음. PASS | REVISE. REVISE면 Analyst에게 **한 번만** 반환, 그래도 PASS가 아니면 HUMAN_REVIEW_REQUIRED
-- backend가 단계마다 JSON schema + reference(`E1`, `FACT:…`, 실제 `DEC-…`)를 검증한 뒤에만 다음 ticket을 만든다. 실패한 출력은 저장하지 않는다.
-- Authoritative Facts(결정·rationale·전제·조건·관측값·evidence 원문)는 backend snapshot 그대로. 화면에서 `Authoritative record`와 `AI inference`를 구분해 표시.
-- Paperclip이 꺼져 있거나 agent가 실패/timeout/budget 차단이면 run만 FAILED (재시도 가능). Review Monitor / Telegram / Review Memo / Ask Agent는 그대로 동작.
-- adapter: Paperclip `process` adapter + `backend/deep_review_worker.py`. `hermes_gateway`는 Hermes API server가 꺼져 있고,
-  `hermes_local`은 사용자 전역 `~/.hermes/skills`에 skill을 설치하므로 쓰지 않는다 (이유는 설계 문서).
-
-### Read-only MCP (`backend/mcp_server.py`)
-
-Hermes가 stdio subprocess로 띄운다 (`~/.hermes/config.yaml`의 `mcp_servers.decision-debt`). tool은 두 개뿐:
-`list_review_due`, `get_decision_detail`. DB를 읽기 전용으로 연다.
+재검토 조건의 판정은 LLM이 아닌 deterministic code로 처리합니다.
 
 ---
 
-## Extraction
+### 3. Decision Memory & Retrieval
 
-- `services/extraction.py`: 원문 → Decision Candidate (2-stage, JSON schema 강제, 원문 인용 evidence 확인).
-- `EXTRACTION_MODE=local`(기본): Qwen만. `auto`: Qwen 먼저, **구조화 실패일 때만** OpenRouter로 다시 추출 (`should_escalate()`).
-- 결과는 항상 Candidate로만 저장된다.
-- 오디오 Source 제목은 추출된 topic으로 자동 생성된다 (사람이 고친 제목은 바꾸지 않음).
+승인된 Decision은 SQLite에 저장되며, 의미 기반 검색을 위해 **gbrain**과 동기화됩니다.
 
-## Knowledge sync (승인 후, 실패해도 승인은 유지)
+예:
 
-- **Dify Knowledge** (`services/knowledge_sync.py`): 승인된 Decision을 문서로 추가.
-- **gbrain** (`services/gbrain_sync.py`, `GBRAIN_SYNC_ENABLED=true`): Decision → Markdown(`~/decision-debt-brain/decisions`) → `gbrain sync --no-pull --source decision-debt --working-tree`. gbrain serve(Hermes gateway)가 PGLite를 쥐고 있으면 sync가 owner에게 위임된다.
-
----
-
-## Backend API
-
-모든 목록/생성은 `project_id` 범위.
-
-| API | 설명 |
-| --- | --- |
-| `GET /api/health` | backend, metric source, review monitor 상태 |
-| `GET/POST /api/projects`, `GET /api/projects/{id}` | 프로젝트 |
-| `GET /api/metrics?project_id=`, `GET /api/metrics/{name}?project_id=` | 현재 지표 (404 없는 지표, 409 미연결, 503 check_metric 불가) |
-| `GET /api/decisions?project_id=`, `GET /api/decisions/{id}` | 결정 + `display_status` + `evaluation` |
-| `GET /api/sources?project_id=`, `POST /api/sources`, `GET/PATCH /api/sources/{id}` | Source (PATCH: 제목 수정 → 이후 자동 제목 변경 안 함) |
-| `POST /api/sources/audio`, `POST /api/sources/{id}/transcribe` | 오디오 업로드(202) / 다시 전사 |
-| `POST /api/extract` | `{project_id, title, type, content}` 또는 `{project_id, source_id}` → Candidate |
-| `GET /api/candidates?project_id=&status=` | `pending` / `approved` / `ignored` / `processed`, 생략 시 전체 |
-| `PATCH /api/candidates/{id}`, `POST .../approve`, `POST .../ignore` | Edit / Approve(Decision 저장 + knowledge sync) / Ignore |
-| `POST /api/candidates/delete` | ignored 후보 기록 삭제 (Source / Decision은 유지) |
-| `GET /api/review-events`, `POST /api/review-events/{id}/acknowledge` | Review Monitor 이벤트 |
-| `POST /api/decisions/{id}/review-memo`, `GET .../review-memos`, `GET /api/review-memos/{id}` | Review Memo |
-| `POST /api/decisions/{id}/deep-review?project_id=`, `GET /api/decisions/{id}/deep-reviews`, `GET /api/deep-reviews/{run_id}`, `GET /api/deep-review/status` | Deep Review (202 + PENDING, `review_reason` TRIGGERED | MANUAL / 404 없음 / 409 진행 중·대체된 Decision / 503 꺼짐) |
-| `POST /api/agent/chat` | Ask Agent (Dify Chatflow proxy) |
-| `GET /api/demo/status`, `GET /api/demo/state`, `GET /api/demo/state/{metric}/preview`, `PATCH /api/demo/state/{metric}`, `POST /api/demo/reset` | Demo Control Center (Demo Mode일 때만) |
-
-## DB (SQLite, `PRAGMA user_version = 8`)
-
-| 테이블 | 내용 |
-| --- | --- |
-| `projects` | name, slug, metric_source / agent_source (config 키만 저장) |
-| `sources` | 원문 (project_id, type: meeting / issue / adr / pr / audio_transcript, content, human_authored) |
-| `source_audio` | 오디오 원본 경로, 전사 상태/엔진, title_origin (v3, v6) |
-| `candidates` | AI 추출 후보 (pending / approved / ignored, extractor, decision_id) |
-| `decisions` | 사람이 승인한 결정 (review_trigger JSON, origin, human_verified, history) |
-| `decision_sources` | Decision ↔ Source evidence |
-| `decision_review_state`, `review_events` | Review Monitor 기준 상태 / 변화 이력 (v2) |
-| `decision_knowledge_sync` | gbrain 동기화 상태 (v4) |
-| `decision_review_memos` | Review Memo + 생성 시점 snapshot + tool_audit (v5) |
-| `deep_review_runs`, `deep_review_artifacts` | Deep Review run (상태 / verdict / Paperclip 식별자 / 시작 시점 snapshot) + 역할별 검증된 JSON (v7). `review_reason` TRIGGERED / MANUAL (v8, 기존 run은 TRIGGERED) |
-
----
-
-## 환경 변수 (`backend/.env`)
-
-값은 커밋하지 않는다 (`.env*`는 git 제외). 이미 설정된 환경변수가 `.env`보다 우선.
-
-| 변수 | 기본값 | 설명 |
-| --- | --- | --- |
-| `DIFY_BASE_URL`, `DIFY_API_KEY` | `http://localhost/v1`, — | Ask Agent Chatflow |
-| `DIFY_API_BASE`, `DIFY_KNOWLEDGE_API_KEY`, `DIFY_DATASET_ID` | — | 승인 후 Dify Knowledge 동기화 |
-| `METRIC_TOOL_URL` | `http://localhost:8000` | check_metric |
-| `LLM_BASE_URL`, `EXTRACTION_MODEL` | `http://localhost:8080/v1`, `qwen2.5-7b-instruct` | 로컬 추출 |
-| `EXTRACTION_MODE` | `local` | `auto`면 구조화 실패 시 OpenRouter 재추출 |
-| `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `OPENROUTER_*` | — | escalation / 비교 실험 |
-| `WHISPER_CLI`, `WHISPER_MODEL_PATH`, `WHISPER_LANGUAGE` | `whisper-cli`, `~/models/whisper/ggml-large-v3-turbo-q5_0.bin`, `ko` | 로컬 STT |
-| `AUDIO_DIR`, `AUDIO_MAX_UPLOAD_MB` | `backend/data/audio`, `200` | 오디오 저장 |
-| `GBRAIN_SYNC_ENABLED`, `GBRAIN_BIN`, `GBRAIN_REPO_DIR`, `GBRAIN_SOURCE_ID` | `false`, `gbrain`, `~/decision-debt-brain`, `decision-debt` | gbrain 동기화 |
-| `HERMES_REVIEW_MEMO_ENABLED`, `HERMES_BIN`, `HERMES_HOME` | `false`, `hermes`, `~/.hermes` | Review Memo |
-| `TELEGRAM_REVIEW_NOTIFICATIONS_ENABLED` | `true` | REVIEW_DUE Telegram 알림 |
-| `REVIEW_MONITOR_ENABLED`, `REVIEW_MONITOR_INTERVAL_SECONDS` | `true`, `30` | Review Monitor |
-| `DEMO_MODE_ENABLED` | `false` | Demo Control Center (production에서는 켜지 않는다) |
-| `DEMO_TOOL_DIR` | `~/decision-debt-tool` | Demo가 실행하는 sample DB script 위치 |
-| `DEEP_REVIEW_ENABLED` | `false` | Deep Review (Paperclip) |
-| `PAPERCLIP_API_URL`, `PAPERCLIP_UI_URL` | `http://127.0.0.1:3110/api`, — | Paperclip API / 개발용 링크 (비우면 링크 숨김) |
-| `DEEP_REVIEW_MODEL`, `DEEP_REVIEW_REASONING_EFFORT`, `DEEP_REVIEW_PROVIDER_SORT` | `OPENROUTER_MODEL`, `OPENROUTER_REASONING_EFFORT`, `throughput` | Analyst / Critic LLM (tool 없음) |
-| `DEEP_REVIEW_STAGE_TIMEOUT_SECONDS`, `DEEP_REVIEW_RESEARCH_TIMEOUT_SECONDS`, `DEEP_REVIEW_LLM_TIMEOUT_SECONDS` | `420`, `240`, `240` | 단계 대기 / Hermes / LLM 시간 상한 |
-
----
-
-## 테스트
-
-```bash
-cd backend && .venv/bin/python -m unittest discover -s tests   # 162개 (실제 Telegram / Hermes / gbrain / Paperclip / LLM 호출 없음)
-cd web && npm run lint && npx tsc --noEmit && npm test && npm run build   # npm test: Node 내장 test runner (lib/*.test.ts)
+```text
+"사용자가 늘어나면 다시 검토해야 하는
+데이터베이스 결정이 뭐였지?"
 ```
 
-## 운영 script (`backend/scripts/`)
+과거 Decision뿐 아니라 당시 근거와 재검토 조건까지 함께 조회할 수 있습니다.
 
-| script | 용도 |
-| --- | --- |
-| `build_seed.py` | Dify Knowledge v4 원본 문서 → `seed_data.json` |
-| `sync_gbrain.py` | 승인된 Decision을 gbrain에 수동 (재)동기화 (`--status`, `--dry-run`, `--all-verified`) |
-| `sync_decision_to_dify.py` | Decision을 Dify Knowledge에 수동 동기화 |
-| `backfill_audio_titles.py` | 오디오 Source 제목 backfill |
-| `dedupe_sources.py` | 같은 원문(정규화 content hash)으로 중복 등록된 미연결 Source 정리. 기본 dry-run, `--apply`면 백업 후 삭제 |
-| `run_extraction_comparison.py` | local vs OpenRouter 추출 비교 실험 |
-| `setup_paperclip_org.py` | Paperclip company / goal / project / agent 3명 + budget을 만들거나 맞춘다 (멱등, 기본 dry-run, `--apply`) |
-| `eval_deep_review.py` | Single Review Memo vs Deep Review 비교 → `docs/evals/deep_review_eval.json` (`--run <id>`면 먼저 Deep Review 실행) |
+**Dify Knowledge**와도 연동하여 RAG 기반 Decision 검색을 지원합니다.
 
 ---
 
-## 디렉터리
+## Multi-Agent Deep Review
 
-```
-backend/
-├─ app.py              API, lifespan(Review Monitor 시작 / 중단된 memo 정리)
-├─ config.py           .env 로드, 연결 설정, 지표 registry, Demo baseline / 시나리오
-├─ db.py               스키마 v1~v6 + migration + CRUD
-├─ schemas.py          Pydantic 모델 (Review Trigger V2 포함)
-├─ metric_registry.py  Canonical Metric Registry (지표 정의, alias, resolver 이름)
-├─ mcp_server.py       Hermes용 read-only MCP (stdio)
-├─ deep_review_worker.py  Paperclip process adapter worker (researcher / analyst / critic)
-├─ services/           review, review_monitor, review_trigger, review_memo, telegram_notifier,
-│                      extraction, metrics, stt, audio_ingest, source_title, knowledge_sync,
-│                      gbrain_sync, decision_read, demo_state, dify, text,
-│                      deep_review, deep_review_contract, paperclip_client, metric_adapters, trigger_status
-├─ scripts/            위 운영 script
-└─ tests/              unittest (fake_hermes / fake_gbrain 포함)
+재검토가 필요한 Decision은 세 개의 역할로 나누어 분석합니다.
 
-web/
-├─ app/page.tsx                     Project Selector
-├─ app/(workspace)/                 overview · decisions · review(Candidates) · sources · agent (공통 header layout)
-├─ app/demo/                        Demo Control Center
-├─ components/                      portfolio · layout · decision · review · sources · demo · agent · project · ui
-└─ lib/                             api(서버) · client-api · types · metrics · portfolio · meeting-date · project
-
-agents/deep-review/   역할별 instruction (researcher / analyst / critic.md) — Paperclip AGENTS.md + worker prompt
-paperclip/            Paperclip 설치(package.json, 버전 고정) + instance data(git 제외) + org.json(git 제외)
-docs/evals/           Single vs Multi 평가 결과
+```text
+Evidence Researcher
+        ↓
+Decision Analyst
+        ↓
+Review Critic
+        ↓
+Human
 ```
 
-디자인: monochrome editorial (ink / paper / hairline). 색 accent(orange)는 REVIEW_DUE에만 쓴다. 토큰은 `web/app/globals.css`.
+### Evidence Researcher
+
+원래 Decision, 근거, 전제, 현재 상태와 관련 과거 Decision을 수집합니다.
+
+해석이나 최종 판단은 하지 않습니다.
+
+### Decision Analyst
+
+Researcher가 수집한 사실만 사용해 다음을 분석합니다.
+
+- 기존 전제와 현재 상태의 차이
+- 변화가 Decision에 미치는 영향
+- 확인되지 않은 정보
+- 추가 검토가 필요한 항목
+
+### Review Critic
+
+Analyst의 결과를 다시 검증합니다.
+
+- 근거 없는 주장
+- 사실과의 모순
+- 빠진 검토 항목
+- 과도한 해석
+
+을 검사하고 `PASS` 또는 `REVISE`를 반환합니다.
+
+`REVISE`는 최대 한 번만 허용하며, 이후에도 검증되지 않으면 `HUMAN_REVIEW_REQUIRED`로 종료합니다.
 
 ---
 
-## 알려진 제한
+## Deep Review Governance
 
-- **중복 Source 방지 없음**: 같은 원문을 다시 Extract하면 새 Source가 생긴다. 과거 중복은 `dedupe_sources.py`로 정리했다 (2026-11-13, 60 → 28).
-- **compound / duration 조건은 자동 판정하지 않는다** (MANUAL, 예: `MVP 레디스 미도입`). Demo에서 latency를 올려도 이 결정은 REVIEW_DUE가 되지 않는다.
-- NEEDS_MAPPING 지표의 실제 connector(GitHub Actions, Prometheus, Stripe …)는 아직 없다. 화면의 '지표 연결' 버튼은 비활성.
-- metric source는 기본 프로젝트(`check_metric_default`)만 연결되어 있다. 다른 프로젝트의 metric 조건은 `Metric not connected`.
-- `backend/.env.example`은 초기 4개 키 + Deep Review 키만 담고 있다 — 전체 목록은 위 환경 변수 표 참고.
-- Deep Review의 ticket 접두어는 Paperclip이 company 이름으로 정해 `DEC-7`처럼 보인다 (Decision ID와 혼동 주의, 변경 API 없음).
-- Paperclip process run은 비용 정보가 없는 receipt를 남기므로 budget policy를 `unpricedUsagePolicy: allow`로 둔다. 실제 LLM 비용은 worker가 보고한다.
+Deep Review는 **Paperclip**을 Multi-Agent control plane으로 사용합니다.
+
+Paperclip은 AI 판단 자체를 담당하지 않고 다음을 관리합니다.
+
+- Researcher → Analyst → Critic reporting line
+- Agent별 ticket
+- 실행 상태
+- budget
+- revision limit
+- audit trail
+
+Agent가 Decision DB를 직접 수정하는 것은 허용하지 않습니다.
+
+```text
+Agent Output
+→ Schema Validation
+→ Backend Deterministic Gate
+→ Next Agent
+```
+
+최종 Decision 변경 권한은 항상 사람에게 있습니다.
+
+---
+
+## Human-in-the-Loop & Reliability
+
+Decision Pulse에서 중요하게 둔 원칙은  
+**“AI가 말했기 때문에 사실이 되는 구조를 만들지 않는 것”**입니다.
+
+### Human approval
+
+AI가 추출한 Candidate는 사람이 승인해야 Decision이 됩니다.
+
+### Fact / Inference separation
+
+DB에서 가져온 사실과 AI가 작성한 분석을 분리합니다.
+
+```text
+Authoritative Record
+≠
+AI Inference
+```
+
+### Read-only agent tools
+
+Hermes Agent가 사용하는 Decision Debt MCP와 gbrain MCP는 읽기 전용으로 제한했습니다.
+
+### Deterministic trigger evaluation
+
+재검토 조건의 충족 여부는 LLM이 아닌 코드로 판정합니다.
+
+### Evidence reference validation
+
+Deep Review에서 AI가 사용하는 `FACT:*`, `E1` 등의 reference를 backend가 검증합니다.
+
+존재하지 않는 근거를 인용하면 결과가 저장되지 않습니다.
+
+---
+
+## Evaluation
+
+Single-Agent Review와 Multi-Agent Deep Review를 비교했습니다.
+
+| Decision | Method | Evidence Coverage | Unsupported Claims |
+|---|---|---:|---:|
+| DEC-2026-0314-DB | Single | 1.00 | 측정 불가 |
+| DEC-2026-0314-DB | Multi | 1.00 | 0 |
+| DEC-2026-1106-DATABASE | Single | 0.67 | 측정 불가 |
+| DEC-2026-1106-DATABASE | Multi | 1.00 | 0 |
+
+Multi-Agent 방식에서는 Researcher와 Analyst의 결과를 Critic이 별도로 검증하도록 해 근거 누락과 unsupported claim을 확인할 수 있도록 했습니다.
+
+### Test Status
+
+- Backend: **169 tests passed**
+- Frontend: **8/8 tests passed**
+- ESLint: passed
+- TypeScript typecheck: passed
+- Production build: passed
+
+---
+
+## Tech Stack
+
+### Frontend
+
+- Next.js 16
+- TypeScript
+- Tailwind CSS
+
+### Backend
+
+- FastAPI
+- SQLite
+- Pydantic
+
+### AI / LLM
+
+- Qwen2.5-7B
+- llama.cpp / llama-swap
+- OpenRouter fallback
+- whisper.cpp
+
+### Agent / Retrieval
+
+- Hermes Agent
+- gbrain
+- Dify
+- Paperclip
+
+### Notification
+
+- Telegram Bot
+
+---
+
+## Architecture
+
+```mermaid
+flowchart TD
+    A[Text / Document / Audio] --> B[whisper.cpp / Preprocessing]
+    B --> C[Qwen Decision Extraction]
+    C --> D{Structure Valid?}
+
+    D -->|No| E[OpenRouter Fallback]
+    D -->|Yes| F[Decision Candidate]
+    E --> F
+
+    F --> G[Human Review]
+    G --> H[(SQLite Decision DB)]
+
+    H --> I[gbrain]
+    H --> J[Dify Knowledge]
+
+    H --> K[Review Trigger]
+    K --> L{Mapping Status}
+
+    L -->|CONNECTED| M[Review Monitor]
+    L -->|NEEDS_MAPPING| N[Waiting for Data Source]
+    L -->|MANUAL| O[Human Review]
+
+    M --> P{Condition Met?}
+    P -->|Yes| Q[REVIEW_DUE]
+    Q --> R[Web / Telegram Alert]
+
+    Q --> S[Deep Review]
+    H --> S
+
+    S --> T[Researcher]
+    T --> U[Analyst]
+    U --> V[Critic]
+    V --> W[Human]
+```
+
+---
+
+## Example
+
+### Original Decision
+
+```text
+MVP에서는 SQLite를 유지한다.
+```
+
+### Rationale
+
+```text
+초기 개발 속도를 우선한다.
+```
+
+### Review Trigger
+
+```text
+user_count > 1000
+```
+
+### Observed
+
+```text
+user_count = 1400
+```
+
+### Result
+
+```text
+ACTIVE
+→ REVIEW_DUE
+→ Telegram notification
+→ Deep Review
+→ PASS
+```
+
+---
+
+## Project Structure
+
+```text
+decision-debt/
+├── backend/
+│   ├── services/
+│   ├── agents/
+│   ├── tests/
+│   └── app.py
+│
+├── web/
+│   └── Next.js application
+│
+├── agents/
+│   └── deep-review/
+│
+├── paperclip/
+│
+├── docs/
+│   ├── architecture/
+│   └── evals/
+│
+├── dev.sh
+└── stop.sh
+```
+
+---
+
+## Design Principles
+
+Decision Pulse는 다음 원칙을 기준으로 설계했습니다.
+
+1. **AI output is not automatically a fact**
+2. **Human approval before Decision confirmation**
+3. **Deterministic logic for deterministic tasks**
+4. **Read-only tools by default**
+5. **Facts and AI inference must be distinguishable**
+6. **Unknown information should remain unknown**
+7. **AI agents never modify Decisions automatically**
+
+---
+
+## Current Limitations
+
+현재 연결된 자동 지표는 제한적이며, 새로운 운영 지표는 adapter 연결이 필요합니다.
+
+현재 실제 연결된 metric:
+
+- `user_count`
+- `search_api_p95_ms`
+- `server_count`
+
+향후 GitHub Actions, Prometheus, Stripe 등 외부 데이터 소스를 adapter 방식으로 연결할 수 있도록 설계했습니다.
+
+---
+
+## Status
+
+Decision Pulse is an individual project developed as part of an AI Agent course.
+
+Current focus:
+
+- Decision extraction reliability
+- Review Trigger monitoring
+- Human-in-the-Loop workflow
+- Evidence-grounded Multi-Agent review
+- Evaluation and validation
